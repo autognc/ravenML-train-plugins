@@ -1,6 +1,10 @@
 # Raven Training Plugins
 Default training plugins for Raven, and examples for making your own plugins.
 
+Note that these plugins assume that all ravenML dependencies are present in your
+virtual environment or on your system. They do not install any dependencies that
+ravenML also depends on.
+
 ## Structure
 All plugins are independent and separate Python packages with the following structure:
 ```
