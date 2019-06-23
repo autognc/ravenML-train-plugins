@@ -5,7 +5,7 @@
 # Date Created:     02/25/2019
 #
 # Install/uninstall script for raven plugins.
-# NOTE: This script MUST be run from the plugins directory.
+# NOTE: this script MUST be run from the ravenML-plugins root.
 ##
 
 
@@ -28,31 +28,35 @@ set -o nounset      # Treat unset variables and parameters other than the specia
 #    exit
 # fi;
 
-# determine if we are installing or uninstalling
-install_flag=d
+# default uninstall and gpu to "d" so they are ignored when passed to install.sh scripts
+uninstall_flag=d
 gpu_flag=d
-ec2_flag=d
+# flag for running in a conda env (will check dependencies after operations)
+conda_flag=0
+# current prefix for requirements files (normal/cpu by default)
 requirements_prefix="requirements"
+
 while getopts "ugc" opt; do
     case "$opt" in
-        c)
-            ec2_flag=c
-            ;;
         u)
-            install_flag=u
+            uninstall_flag=u
             ;;
         g)
             gpu_flag=g
             requirements_prefix="requirements-gpu"
+            ;;
+        c)
+            conda_flag=1
      esac
 done
 
+# loop through plugin directories
 for f in * ; do
     if [ -d ${f} ]; then
         echo "Going on plugin $f..."
         cd $f
-        ./install.sh -$install_flag -$gpu_flag
-        if [ "$install_flag" = "u" ]; then
+        ./install.sh -$uninstall_flag -$gpu_flag
+        if [ "$uninstall_flag" = "u" ]; then
             echo "Cleaning up plugin dependencies..."
             pip uninstall -r $requirements_prefix.txt -y
         fi
@@ -60,9 +64,8 @@ for f in * ; do
     fi
 done
 
-
-
-if [ "$ec2_flag" = "d" ]; then
+# ensure conda env still meets environment.yml file if conda flag set
+if [ $conda_flag -eq 1 ]; then
     # ensure raven core environment dependencies are still met
     echo "Checking raven core dependencies..."
     conda env update -f environment.yml
