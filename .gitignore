@@ -3,8 +3,8 @@ settings.json
 .DS_Store
 
 # plugin requirements files
-plugins/**/requirements.txt
-plugins/**/requirements-gpu.txt
+**/requirements.txt
+**/requirements-gpu.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

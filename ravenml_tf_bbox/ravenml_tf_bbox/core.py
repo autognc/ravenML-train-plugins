@@ -50,9 +50,9 @@ def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
     if verbose:
-        tf.logging.set_verbosity(tf.logging.INFO)
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
-        tf.logging.set_verbosity(tf.logging.FATAL)
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
     
     # create training metadata dict and populate with basic information
     metadata = {}
@@ -135,8 +135,9 @@ def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
     
     # get extra config files
     extra_files = _get_checkpoints_and_config_paths(base_dir)
+    local_mode = train.artifact_path is not None
 
-    result = TrainOutput(metadata, base_dir, model_path, extra_files)
+    result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
     
 
@@ -173,6 +174,7 @@ def _import_od():
     # to suppress printed warnings from object detection and tf
     text_trap = io.StringIO()
     sys.stdout = text_trap
+    sys.stderr = text_trap
     
     # Calls to _dynamic_import below map to the following standard imports:
     #
@@ -185,6 +187,7 @@ def _import_od():
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
+    sys.stderr = sys.__stderr__
     
 # this function is derived from https://stackoverflow.com/a/46878490
 # NOTE: this function should be used in all plugins, but the function is NOT

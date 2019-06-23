@@ -65,6 +65,5 @@ done
 if [ "$ec2_flag" = "d" ]; then
     # ensure raven core environment dependencies are still met
     echo "Checking raven core dependencies..."
-    cd ..
     conda env update -f environment.yml
 fi
