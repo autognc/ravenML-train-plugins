@@ -29,6 +29,7 @@ set -o nounset      # Treat unset variables and parameters other than the specia
 # fi;
 
 # default uninstall and gpu to "d" so they are ignored when passed to install.sh scripts
+# NOTE: this requires that install.sh scripts parse the d argument but simply ignore it
 uninstall_flag=d
 gpu_flag=d
 # flag for running in a conda env (will check dependencies after operations)

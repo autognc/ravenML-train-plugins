@@ -1,5 +1,5 @@
 # Raven Training Plugins
-Default training plugins for Raven, and examples for making your own plugins.
+Default training plugins for ravenML, and examples for making your own plugins.
 
 Note that these plugins assume that all ravenML dependencies are present in your
 virtual environment or on your system. They do not install any dependencies that
@@ -8,8 +8,8 @@ ravenML also depends on.
 ## Structure
 All plugins are independent and separate Python packages with the following structure:
 ```
-raven_package_name/                   # name of the package, with underscores
-    raven_package_name/               # ''
+ravenml_package_name/                   # name of the package, with underscores
+    ravenml_package_name/               # ''
         __init__.py             
         core.py                 # core of plugin - contains command group 
                                     entire plugin flows from
@@ -43,6 +43,10 @@ Which are created by the command:
 pip-compile --out-file <prefix>.txt <prefix>.in
 ```
 
+These files record *all* dependencies for anything listed in `requirements.in` and `requirements-gpu.in`, respectively.
+They can then be used to do a clean uninstall of a plugin's dependencies without leaving the dependencies of those dependencies
+(whew) dangling on the system.
+
 ### install.sh
 An `install.sh` script should be written to handle all install logic (including updating pip-compile created requirements files) and ensure 
 external dependenices (such as NVIDIA Drivers or additional packages) are met on install. When uninstalling, this script
@@ -63,26 +67,27 @@ All `install.sh` scripts should support two flags:
 ### install_all.sh
 Installs all plugins in this directory using their `install.sh` scripts. Mostly a convenience item when installing.
 When uninstalling, this script should be used **exclusively** in place of any individual plugin's `install.sh` script.
-It supports the same two flags as any `install.sh`:
+It supports the same two flags as any `install.sh`, plus one additional flag:
 - `-u`: uninstall. Passed to uninstall all plugins, including all plugin dependencies.
-- `-g` GPU install. Can be paired with `-g` for uninstalling a GPU install.
-
-`install_all.sh` contains logic to ensure that if any plugins share dependencies with Raven core these dependencies
-remain met at the compeition of the pluigin uninstall. This is accomplished by verifying the environment against its
-`environment.yml` file once `install.sh -u` script is run for each plugin.
+- `-g`: GPU install. Can be paired with `-g` for uninstalling a GPU install.
+- `-c`: conda mode. Passed to indicate that an uninstall is occuring inside a conda environment defined
+  by the `environment.yml` in the root of this repository. This `environment.yml` will always mirror the
+  `environment.yml` in [ravenML](https://github.com/autognc/ravenML). When passed, `install_all.sh` will
+  verify the environment against `environment.yml` once `install.sh -u` is run for each plugin. This guarantees
+  that if any plugins share dependencies with ravenML core these dependencies remain met at the completion of the plugin uninstall. 
 
 ## Making a Plugin
 
 Follow these steps to create a plugin.
 
 ### 1. Create file structure.
-Every Raven training plugin will begin with the following file structure:
+Every ravenML training plugin will begin with the following file structure:
 ```
-raven_<plugin_name>/                   # name of the package, with underscores
-    raven_<plugin_name>/               # ''
+ravenml_<plugin_name>/                   # name of the package, with underscores
+    ravenml_<plugin_name>/               # ''
         __init__.py             
-        core.py                 # core of plugin - contains command group 
-                                    entire plugin flows from
+        core.py                 # core of plugin - contains top level command 
+                                    group for entire plugin 
     install.sh                  # install script for the plugin
     requirements.in             # user created requirements file for CPU install
     requirements-gpu.in         # user created requirements file for GPU install
@@ -91,14 +96,14 @@ raven_<plugin_name>/                   # name of the package, with underscores
 
 We will go through each of these files individually.
 
-#### Inner `raven_<plugin_name>/` directory
+#### Inner `ravenml_<plugin_name>/` directory
 Contains the source code for the plugin itself. Inside are two files:
 1. `__init__.py`: empty file which marks this at a python module.
 2. `core.py`: core of the plugin where the top level command group is located. Go from the skeleton below:
 ```python
 import click
-from raven.train.options import kfold_opt, pass_train
-from raven.train.interfaces import TrainInput, TrainOutput
+from ravenml.train.options import kfold_opt, pass_train
+from ravenml.train.interfaces import TrainInput, TrainOutput
 
 @click.group(help='Top level command group description')
 @click.pass_context
@@ -126,16 +131,16 @@ Contains setuptools code for turning this plugin into a python package. Go from 
 from setuptools import setup
 
 setup(
-    name='raven_<plugin_name>',
+    name='ravenml_<plugin_name>',
     version='0.1',
-    description='Training plugin for raven',
-    packages=['raven_<plugin_name>'],
+    description='Training plugin for ravenML',
+    packages=['ravenml_<plugin_name>'],
     install_requires=[
         'Click',
     ],
     entry_points='''
-        [raven.plugins.train]
-        <plugin_name>=raven_<plugin_name>.core:<plugin_name>
+        [ravenml.plugins.train]
+        <plugin_name>=ravenml_<plugin_name>.core:<plugin_name>
     '''
 )
 ```
@@ -161,6 +166,8 @@ set -o nounset      # Treat unset variables and parameters other than the specia
 # parse flags
 install=1
 requirements_prefix="requirements"
+# NOTE: the "d" argument must be parsed in the getops call even though it is ignored.
+# It acts as a default for install_all.sh to pass.
 while getopts "ugd" opt; do
     case "$opt" in
         u)
@@ -190,11 +197,16 @@ fi
 Create additional files, directories, and modules as needed. Just be sure to include
 an `__init__.py` in every directory you create, and think in modules.  
 
-Consider creating a separate directory for each sub command group, structured as:
+Consider creating a separate directory for each sub command group under the main one
+named after the plugin and defined in `core.py`. These are structured as:
 ```
-<command_group_name>/
-    __init__.py
-    commands.py
+ravenml_<plugin_name>/
+    ravenml_<plugin_name>/
+        __init__.py
+        core.py
+        <command_group_name>/
+            __init__.py
+            commands.py
 ```
 
 Go from the skeleton below for `commands.py`:
@@ -217,35 +229,35 @@ def <command_name>():
 ```
 
 Within this directory you can create an `interfaces.py` file for any interfaces you want to expose
-from the command and an `options.py` file for any command options you want to expose.
+for the command group and an `options.py` file for any command group options you want to expose.
 
-To import this sub command group in `<plugin_name>/<plugin_name>/core.py` you would put the following lines:
+To import this sub command group in `ravenml_<plugin_name>/ravenml_<plugin_name>/core.py` you would put the following lines:
 ```python
-from <plugin_name>.<command_group_name>.commands import <command_group_name>
+from ravenml_<plugin_name>.<command_group_name>.commands import <command_group_name>
 
-<plugin_name>.add_command(<command_group_name>)
+<plugin_name>.add_command(<command_group_name>)         # this assumes that the command group defined in core.py is named <plugin_name>
 ```
 
 ### 3. Install plugin
-**NOTE** You must be inside the Raven anaconda environment when performing this operation.
+**NOTE** You must be inside the same Python environment as your ravenML installation when performing this operation.
 
-Install the plugin using `install.sh`, using the `-g` flag if appropriate. At this point, if you run
+Install the plugin using your installation script via `./install.sh`, using the `-g` flag if appropriate. At this point, if you run
 `pip list` you should see your plugin listed, with the underscores in its named replaced by dashes.
 
 At this point, your plugin should automatically load inside of Raven. Run `raven train list` to see 
 all installed plugins and verify that yours appears.
 
 ### 4. (Optional) Test uninstalling plugin
-It is a good idea to test that your plugin can be properly uninstalled as well. Recall that to uninstall a plugin
-added to the Raven `plugins/` directory, you **must** use the `install_all.sh` script with the `-u` flag. 
+It is a good idea to test that your plugin can be properly uninstalled as well. Recall that to uninstall a plugin,
+you **must** use the `install_all.sh` script with the `-u` flag (and `-g` if appropriate).
 
-Note that if plugins are created outside of the `plugins/`, directory they cannot be uninstalled using the 
-`install_all.sh` script. There is no easy solution for this. It is up to the user to either leave plugin 
+Note that plugins downloaded and installed outside of this repository cannot be uninstalled using the 
+`install_all.sh` script, as they are not tracked. There is no easy solution for this. It is up to the user to either leave plugin 
 dependencies installed in the environment, write additional scripts to ensure plugin depenency removal does 
 not impact other plugins, or some other manual solution.
 
 ## Standard Interfaces
-Two classes define the **standard interface** between Raven core and training plugins:
+Two classes define the **standard interface** between ravenML core and training plugins:
 - `TrainInput`
 - `TrainOutput`
 
