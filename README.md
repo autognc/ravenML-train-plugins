@@ -256,6 +256,51 @@ Note that plugins downloaded and installed outside of this repository cannot be 
 dependencies installed in the environment, write additional scripts to ensure plugin depenency removal does 
 not impact other plugins, or some other manual solution.
 
+## Best Practices
+The `ravenml.utils.plugins` module contains useful functions for performing common training plugin tasks
+such as prompting for basic metadata. **You should explore this module and use it as much as possible in any plugin you create for consistency.**
+
+Some important best practices are outlined below.
+
+### Dynamic Imports
+Oftentimes plugins will depend on large libraries such as Tensorflow or PyTorch. Due to the way that Click loads plugins,
+if you import these with standard statements at the top of your files they will be imported on every `ravenml` command, including
+ones that do not utilize your plugin. This makes the entire CLI slow. To avoid this, a dynamic import function is provided in `ravenml.utils.plugins`.
+
+However, **this function cannot be imported.** You must copy and paste the code into any file you wish to use it in due to the way
+it interacts with the Python import system. You can see the function below (it is also commented inside `ravenml.utils.plugins`):
+```python
+# function is derived from https://stackoverflow.com/a/46878490
+def _dynamic_import(modulename, shortname = None, asfunction = False):
+    """ Function to dynamically import python modules into the global scope.
+
+    Args:
+        modulename (str): name of the module to import (ex: os, ex: os.path)
+        shortname (str, optional): desired shortname binding of the module (ex: import tensorflow as tf)
+        asfunction (bool, optional): whether the shortname is a module function or not (ex: from time import time)
+        
+    Examples:
+        Whole module import: i.e, replace "import tensorflow"
+        >>> _dynamic_import('tensorflow')
+        
+        Named module import: i.e, replace "import tensorflow as tf"
+        >>> _dynamic_import('tensorflow', 'tf')
+        
+        Submodule import: i.e, replace "from object_detction import model_lib"
+        >>> _dynamic_import('object_detection.model_lib', 'model_lib')
+        
+        Function import: i.e, replace "from ravenml.utils.config import get_config"
+        >>> _dynamic_import('ravenml.utils.config', 'get_config', asfunction=True)
+        
+    """
+    if shortname is None: 
+        shortname = modulename
+    if asfunction is False:
+        globals()[shortname] = importlib.import_module(modulename)
+    else:        
+        globals()[shortname] = getattr(importlib.import_module(modulename), shortname)
+```
+
 ## Standard Interfaces
 Two classes define the **standard interface** between ravenML core and training plugins:
 - `TrainInput`
