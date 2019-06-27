@@ -29,6 +29,11 @@ from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_a
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
+
+### OPTIONS ###
+# put any custom Click options you create here
+
+
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
 @click.pass_context
@@ -37,7 +42,7 @@ def tf_bbox(ctx):
     
 @tf_bbox.command(help='Train a model.')
 @verbose_opt
-@kfold_opt
+# @kfold_opt
 @pass_train
 @click.pass_context
 def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
@@ -94,7 +99,6 @@ def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
         raise e
 
     model_dir = os.path.join(base_dir, 'models/model')
-    # model_dir = base_dir
     pipeline_config_path = os.path.join(base_dir, 'models/model/pipeline.config')
 
     config = tf.estimator.RunConfig(model_dir=model_dir)
