@@ -29,6 +29,11 @@ from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_a
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
+
+### OPTIONS ###
+# put any custom Click options you create here
+
+
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
 @click.pass_context
