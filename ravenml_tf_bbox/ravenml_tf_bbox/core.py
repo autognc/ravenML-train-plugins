@@ -37,7 +37,7 @@ def tf_bbox(ctx):
     
 @tf_bbox.command(help='Train a model.')
 @verbose_opt
-@kfold_opt
+# @kfold_opt
 @pass_train
 @click.pass_context
 def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
@@ -94,7 +94,6 @@ def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
         raise e
 
     model_dir = os.path.join(base_dir, 'models/model')
-    # model_dir = base_dir
     pipeline_config_path = os.path.join(base_dir, 'models/model/pipeline.config')
 
     config = tf.estimator.RunConfig(model_dir=model_dir)
