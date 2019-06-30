@@ -45,7 +45,7 @@ def tf_bbox(ctx):
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, kfold: bool, verbose: bool):
+def train(ctx, train: TrainInput, verbose: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
