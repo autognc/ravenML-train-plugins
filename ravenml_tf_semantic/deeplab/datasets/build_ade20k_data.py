@@ -19,7 +19,7 @@ import math
 import os
 import random
 import sys
-import build_data
+from ravenml_tf_semantic import data_tools
 import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
@@ -75,8 +75,8 @@ def _convert_dataset(dataset_split, dataset_dir, dataset_label_dir):
   num_images = len(img_names)
   num_per_shard = int(math.ceil(num_images / float(_NUM_SHARDS)))
 
-  image_reader = build_data.ImageReader('jpeg', channels=3)
-  label_reader = build_data.ImageReader('png', channels=1)
+  image_reader = data_tools.ImageReader('jpeg', channels=3)
+  label_reader = data_tools.ImageReader('png', channels=1)
 
   for shard_id in range(_NUM_SHARDS):
     output_filename = os.path.join(
@@ -100,7 +100,7 @@ def _convert_dataset(dataset_split, dataset_dir, dataset_label_dir):
         if height != seg_height or width != seg_width:
           raise RuntimeError('Shape mismatched between image and label.')
         # Convert to tf example.
-        example = build_data.image_seg_to_tfexample(
+        example = data_tools.image_seg_to_tfexample(
             image_data, img_names[i], height, width, seg_data)
         tfrecord_writer.write(example.SerializeToString())
     sys.stdout.write('\n')

@@ -19,7 +19,7 @@ The Cityscapes dataset is expected to have the following directory structure:
 
   + cityscapes
      - build_cityscapes_data.py (current working directiory).
-     - build_data.py
+     - data_tools.py
      + cityscapesscripts
        + annotation
        + evaluation
@@ -64,7 +64,7 @@ import math
 import os.path
 import re
 import sys
-import build_data
+from ravenml_tf_semantic import data_tools
 import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
@@ -139,8 +139,8 @@ def _convert_dataset(dataset_split):
   num_images = len(image_files)
   num_per_shard = int(math.ceil(num_images / float(_NUM_SHARDS)))
 
-  image_reader = build_data.ImageReader('png', channels=3)
-  label_reader = build_data.ImageReader('png', channels=1)
+  image_reader = data_tools.ImageReader('png', channels=3)
+  label_reader = data_tools.ImageReader('png', channels=1)
 
   for shard_id in range(_NUM_SHARDS):
     shard_filename = '%s-%05d-of-%05d.tfrecord' % (
@@ -166,7 +166,7 @@ def _convert_dataset(dataset_split):
         if re_match is None:
           raise RuntimeError('Invalid image filename: ' + image_files[i])
         filename = os.path.basename(re_match.group(1))
-        example = build_data.image_seg_to_tfexample(
+        example = data_tools.image_seg_to_tfexample(
             image_data, filename, height, width, seg_data)
         tfrecord_writer.write(example.SerializeToString())
     sys.stdout.write('\n')
