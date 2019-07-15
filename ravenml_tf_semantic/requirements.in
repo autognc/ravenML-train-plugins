@@ -1,7 +1,6 @@
 numpy==1.16.4
-tensorflow==1.14.0
+tensorflow==1.12.0
 Pillow==6.0.0
 matplotlib==3.1.0
-setuptools>=41.0.0
-
-# tensorflow/models: 695265c8ada076b7255ab0a0c8f44c3ea67cb5eb
+tqdm==4.32.2
+#git+https://github.com/autognc/models@deeplab-0.0.1#egg=deeplab&subdirectory=research/deeplab
