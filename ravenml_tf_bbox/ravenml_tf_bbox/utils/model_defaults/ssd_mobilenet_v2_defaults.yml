@@ -1,5 +1,4 @@
 RMSProp:
-    num_classes : 2
     train_steps: 100
     use_dropout : true
     dropout_keep_probability : 0.8
@@ -9,7 +8,6 @@ RMSProp:
     max_detections_per_class : 100
 
 Adam:
-    num_classes: 2
     train_steps: 100
     use_dropout : true
     dropout_keep_probability : 0.8

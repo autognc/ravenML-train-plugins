@@ -57,6 +57,11 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     pbtxt_file = data_path / 'label_map.pbtxt'
     shutil.copy(pbtxt_file, base_dir / 'data')
 
+    # calculate number of classes from pbtxt file
+    with open(pbtxt_file, "r") as f:
+        ids = [line for line in f if "id:" in line]
+        num_classes = len(ids)
+
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
     # model_folder = models_folder / 'model'
@@ -108,6 +113,9 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     for key, value in user_config.items():
         formatted = '<replace_' + key + '>'
         pipeline_contents = pipeline_contents.replace(formatted, str(value))
+
+    # insert num clases into config file
+    pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
 
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
