@@ -115,8 +115,8 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     
     # place TF record files into training directory
     # TODO: change to move all sharded chunks
-    train_record = data_path / 'dev/standard/tf/train.record-00000-of-00001'
-    test_record = data_path / 'dev/standard/tf/test.record-00000-of-00001'
+    train_record = data_path / 'splits/standard/train/train.record-00000-of-00001'
+    test_record = data_path / 'splits/standard/train/test.record-00000-of-00001'
     shutil.copy(train_record, base_dir / 'data')
     shutil.copy(test_record, base_dir / 'data')
 
