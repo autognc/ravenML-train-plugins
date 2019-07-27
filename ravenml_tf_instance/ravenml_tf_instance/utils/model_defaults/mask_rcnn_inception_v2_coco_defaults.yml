@@ -1,0 +1,8 @@
+Momentum:
+    num_classes: 5
+    train_steps: 50000
+    use_dropout : false
+    dropout_keep_probability : 1.0
+    l2_regularizer_weight : 0.0
+    batch_size : 1
+    max_detections_per_class : 100
