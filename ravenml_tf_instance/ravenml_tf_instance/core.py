@@ -140,11 +140,10 @@ def train(ctx, train: TrainInput, verbose: bool):
     
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
-    model_path = base_dir / 'models' / 'model' / 'export' / 'exported_model'
-    model_path = model_path / os.listdir(model_path)[0] / 'saved_model.pb'
     
     # get extra config files
-    extra_files = _get_paths_for_extra_files(base_dir)
+    extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
+    model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
@@ -168,6 +167,9 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
 
+    saved_model_path = extras_path / 'export' / 'exported_model'
+    saved_model_path = saved_model_path / os.listdir(saved_model_path)[0] / 'saved_model.pb'
+
     checkpoints = [f for f in files if checkpoint_regex.match(f)]
 
     # calculate the max checkpoint
@@ -189,8 +191,10 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras = [extras_path / f for f in checkpoints]
     extras.append(pipeline_path)
     extras.append(extras_path / 'graph.pbtxt')
-    extras.append(exported_dir / 'frozen_inference_graph.pb')
+    extras.append(saved_model_path)
 
+    # path to exported frozen inference model
+    frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
 
     # append event checkpoints for tensorboard
     for f in os.listdir(extras_path):
@@ -201,7 +205,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
         if f.startswith('events.out'):
             extras.append(extras_path / 'eval_0' / f)
 
-    return extras
+    return extras, frozen_graph_path
 
 
 def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
