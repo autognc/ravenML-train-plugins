@@ -19,7 +19,7 @@ from ravenml.utils.question import user_confirms, user_input, user_selects
 
 init()
 
-# local cache for the tf_bbox plugin (within ravenML cache)
+# local cache for the tf_instance plugin (within ravenML cache)
 instance_cache = LocalCache(global_cache.path / 'tf-instance')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict):
@@ -166,9 +166,9 @@ def download_model_arch(model_name):
         Path: path to model architecture
     """
     url = 'http://download.tensorflow.org/models/object_detection/%s.tar.gz' %(model_name)
-    # make paths within bbox cache 
-    instance_cache.ensure_subpath_exists('bbox_model_archs')
-    archs_path = instance_cache.path / 'bbox_model_archs'
+    # make paths within instance cache 
+    instance_cache.ensure_subpath_exists('instance_model_archs')
+    archs_path = instance_cache.path / 'instance_model_archs'
     untarred_path = archs_path / model_name
     # check if download is required
     if not instance_cache.subpath_exists(untarred_path):
