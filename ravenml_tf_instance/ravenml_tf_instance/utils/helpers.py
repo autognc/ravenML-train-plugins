@@ -20,7 +20,7 @@ from ravenml.utils.question import user_confirms, user_input, user_selects
 init()
 
 # local cache for the tf_bbox plugin (within ravenML cache)
-bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
+instance_cache = LocalCache(global_cache.path / 'tf-instance')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict):
     """ Prepares the system for training.
@@ -167,11 +167,11 @@ def download_model_arch(model_name):
     """
     url = 'http://download.tensorflow.org/models/object_detection/%s.tar.gz' %(model_name)
     # make paths within bbox cache 
-    bbox_cache.ensure_subpath_exists('bbox_model_archs')
-    archs_path = bbox_cache.path / 'bbox_model_archs'
+    instance_cache.ensure_subpath_exists('bbox_model_archs')
+    archs_path = instance_cache.path / 'bbox_model_archs'
     untarred_path = archs_path / model_name
     # check if download is required
-    if not bbox_cache.subpath_exists(untarred_path):
+    if not instance_cache.subpath_exists(untarred_path):
         click.echo("Model checkpoint not found in cache. Downloading...")
         # download tar file
         tar_name = url.split('/')[-1]
