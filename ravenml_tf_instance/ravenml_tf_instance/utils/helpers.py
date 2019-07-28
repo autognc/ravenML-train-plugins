@@ -57,6 +57,11 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     pbtxt_file = data_path / 'label_map.pbtxt'
     shutil.copy(pbtxt_file, base_dir / 'data')
 
+    # calculate number of classes from pbtxt file
+    with open(pbtxt_file, "r") as f:
+        ids = [line for line in f if "id:" in line]
+        num_classes = len(ids)
+
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
     # model_folder = models_folder / 'model'
@@ -109,14 +114,17 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         formatted = '<replace_' + key + '>'
         pipeline_contents = pipeline_contents.replace(formatted, str(value))
 
+    # insert num clases into config file
+    pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
+
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
         file.write(pipeline_contents)
     
     # place TF record files into training directory
     # TODO: change to move all sharded chunks
-    train_record = data_path / 'dev/standard/tf/train.record-00000-of-00001'
-    test_record = data_path / 'dev/standard/tf/test.record-00000-of-00001'
+    train_record = data_path / 'splits/standard/train/train.record-00000-of-00001'
+    test_record = data_path / 'splits/standard/train/test.record-00000-of-00001'
     shutil.copy(train_record, base_dir / 'data')
     shutil.copy(test_record, base_dir / 'data')
 
