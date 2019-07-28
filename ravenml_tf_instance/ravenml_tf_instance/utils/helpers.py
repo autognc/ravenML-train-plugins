@@ -20,7 +20,7 @@ from ravenml.utils.question import user_confirms, user_input, user_selects
 init()
 
 # local cache for the tf_bbox plugin (within ravenML cache)
-bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
+instance_cache = LocalCache(global_cache.path / 'tf-instance')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict):
     """ Prepares the system for training.

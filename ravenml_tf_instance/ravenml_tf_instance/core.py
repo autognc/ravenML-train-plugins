@@ -24,7 +24,7 @@ from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
 from ravenml.utils.question import cli_spinner, Spinner, user_selects 
 from ravenml.utils.plugins import fill_basic_metadata
-from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
+from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -64,7 +64,7 @@ def train(ctx, train: TrainInput, verbose: bool):
     fill_basic_metadata(metadata, train.dataset)
 
     # set base directory for model artifacts 
-    base_dir = bbox_cache.path / 'temp' if train.artifact_path is None \
+    base_dir = instance_cache.path / 'temp' if train.artifact_path is None \
                     else train.artifact_path
  
     # load model choices from YAML
