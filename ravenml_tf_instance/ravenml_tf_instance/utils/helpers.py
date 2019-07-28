@@ -167,11 +167,11 @@ def download_model_arch(model_name):
     """
     url = 'http://download.tensorflow.org/models/object_detection/%s.tar.gz' %(model_name)
     # make paths within bbox cache 
-    bbox_cache.ensure_subpath_exists('bbox_model_archs')
-    archs_path = bbox_cache.path / 'bbox_model_archs'
+    instance_cache.ensure_subpath_exists('bbox_model_archs')
+    archs_path = instance_cache.path / 'bbox_model_archs'
     untarred_path = archs_path / model_name
     # check if download is required
-    if not bbox_cache.subpath_exists(untarred_path):
+    if not instance_cache.subpath_exists(untarred_path):
         click.echo("Model checkpoint not found in cache. Downloading...")
         # download tar file
         tar_name = url.split('/')[-1]
