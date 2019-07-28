@@ -190,6 +190,7 @@ def download_model_arch(model_name):
         click.echo('Model checkpoint found in cache.')
         
     return untarred_path
+
     
 def _configuration_prompt(current_config: dict):
     """Prompts user to allow editing of current training configuration.

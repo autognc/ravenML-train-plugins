@@ -9,6 +9,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import warnings
+warnings.filterwarnings("ignore")
+
 import os
 import click
 import io
@@ -25,6 +28,9 @@ from ravenml.data.interfaces import Dataset
 from ravenml.utils.question import cli_spinner, Spinner, user_selects 
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
+from google.protobuf import text_format
+from object_detection import exporter
+from object_detection.protos import pipeline_pb2
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -135,10 +141,10 @@ def train(ctx, train: TrainInput, verbose: bool):
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
     model_path = base_dir / 'models' / 'model' / 'export' / 'exported_model'
-    model_path = model_path / os.listdir(model_path)[0] / 'saved_model.pb'        
+    model_path = model_path / os.listdir(model_path)[0] / 'saved_model.pb'
     
     # get extra config files
-    extra_files = _get_checkpoints_and_config_paths(base_dir)
+    extra_files = _get_paths_for_extra_files(base_dir)
     local_mode = train.artifact_path is not None
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
@@ -146,9 +152,10 @@ def train(ctx, train: TrainInput, verbose: bool):
     
 
 ### HELPERS ###
-def _get_checkpoints_and_config_paths(artifact_path: Path):
+def _get_paths_for_extra_files(artifact_path: Path):
     """Returns the filepaths for all checkpoint, config, and pbtxt (label)
-    files in the artifact directory.
+    files in the artifact directory. Gets filepath for the exported inference
+    graph.
 
     Args:
         artifact_path (Path): path to training artifacts
@@ -160,11 +167,32 @@ def _get_checkpoints_and_config_paths(artifact_path: Path):
     # get checkpoints
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
-    extras = [extras_path / f for f in files if checkpoint_regex.match(f)]
-    # append other files
-    extras.append(extras_path / 'pipeline.config')
-    extras.append(extras_path / 'graph.pbtxt')
 
+    checkpoints = [f for f in files if checkpoint_regex.match(f)]
+
+    # calculate the max checkpoint
+    max_checkpoint = 0
+    for checkpoint in checkpoints:
+        checkpoint_num = int(checkpoint.split('-')[1].split('.')[0])
+        if checkpoint_num > max_checkpoint:
+            max_checkpoint = checkpoint_num
+
+    ckpt_prefix = 'model.ckpt-' + str(max_checkpoint)
+    checkpoint_path = extras_path / ckpt_prefix
+    pipeline_path = extras_path / 'pipeline.config'
+    exported_dir = artifact_path / 'frozen_model'
+
+    # export frozen inference graph
+    _export_frozen_inference_graph(str(pipeline_path), str(checkpoint_path), str(exported_dir))
+
+    # append files to include in extras directory
+    extras = [extras_path / f for f in checkpoints]
+    extras.append(pipeline_path)
+    extras.append(extras_path / 'graph.pbtxt')
+    extras.append(exported_dir / 'frozen_inference_graph.pb')
+
+
+    # append event checkpoints for tensorboard
     for f in os.listdir(extras_path):
         if f.startswith('events.out'):
             extras.append(extras_path / f)
@@ -174,6 +202,30 @@ def _get_checkpoints_and_config_paths(artifact_path: Path):
             extras.append(extras_path / 'eval_0' / f)
 
     return extras
+
+
+def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
+    """Exports frozen inference graph from model checkpoints
+
+    Args: 
+        pipeline_config_path (str): path to pipeline config file
+        checkpoint_path (str): path to checkpoint prefix with highest steps
+            e.g. the checkpoint_path for /model/model.ckpt-100.index is 
+            /model/model.ckpt-100
+        output_directory (str): directory where the frozen_inference_graph will
+            be outputted to
+    """
+    
+    pipeline_config = pipeline_pb2.TrainEvalPipelineConfig()
+    with tf.gfile.GFile(pipeline_config_path, 'r') as f:
+        text_format.Merge(f.read(), pipeline_config)
+    text_format.Merge('', pipeline_config)
+    
+    input_shape = None
+    exporter.export_inference_graph(
+        'image_tensor', pipeline_config, checkpoint_path,
+        output_directory, input_shape=input_shape,
+        write_inference_graph=False)
 
 # stdout redirection found at https://codingdose.info/2018/03/22/supress-print-output-in-python/
 def _import_od():
