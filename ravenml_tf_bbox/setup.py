@@ -6,7 +6,7 @@ from setuptools import setup
 
 setup(
     name='ravenML_tf_bbox',
-    version='0.1',
+    version='0.2',
     description='Training plugin for ravenml',
     packages=['ravenml_tf_bbox'],
     entry_points='''
