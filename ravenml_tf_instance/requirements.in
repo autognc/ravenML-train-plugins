@@ -1,0 +1,10 @@
+tensorflow
+absl-py
+pycocotools
+matplotlib
+contextlib2
+pillow
+lxml
+jupyter
+numpy
+cython
