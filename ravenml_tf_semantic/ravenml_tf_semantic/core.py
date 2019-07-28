@@ -37,7 +37,7 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
         else train.artifact_path
 
     # set dataset directory
-    data_dir = train.dataset.path / "dev" / "standard" / "tf"
+    data_dir = train.dataset.path / "splits" / "complete" / "train"
 
     # parse config file
     config_opts = {}
@@ -76,7 +76,7 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
             'train': -1,  # these aren't actually used
             'val': -1,
         },
-        num_classes=num_classes,
+        num_classes=num_classes + 1,
         ignore_label=0,
     )
     data_generator._DATASETS_INFORMATION['custom'] = dataset_info
@@ -100,12 +100,15 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     sys.argv += [f"--{key}={value}" for key, value in config_opts.items()]
 
     # run deeplab
-    with TFRecordFilenameConverter(data_dir.absolute()):
-        deeplab_train.main(None)
+    try:
+        with TFRecordFilenameConverter(data_dir.absolute()):
+            deeplab_train.main(None)
+    except KeyboardInterrupt:
+        pass
 
     # return TrainOutput
     model_path = artifact_dir / "checkpoint"
-    checkpoint_files = glob.glob(artifact_dir.absolute() + "/model.ckpt-*")
+    checkpoint_files = glob.glob(str(artifact_dir.absolute() / "*"))
     return TrainOutput(metadata, artifact_dir, model_path, checkpoint_files, train.artifact_path is not None)
 
 
