@@ -167,8 +167,12 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
 
+    # path to saved_model.pb
     saved_model_path = extras_path / 'export' / 'exported_model'
     saved_model_path = saved_model_path / os.listdir(saved_model_path)[0] / 'saved_model.pb'
+
+    # path to label map
+    labels_path = artifact_path / 'data' / 'label_map.pbtxt'
 
     checkpoints = [f for f in files if checkpoint_regex.match(f)]
 
@@ -192,6 +196,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras.append(pipeline_path)
     extras.append(extras_path / 'graph.pbtxt')
     extras.append(saved_model_path)
+    extras.append(labels_path)
 
     # path to exported frozen inference model
     frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
