@@ -164,6 +164,15 @@ def _get_checkpoints_and_config_paths(artifact_path: Path):
     # append other files
     extras.append(extras_path / 'pipeline.config')
     extras.append(extras_path / 'graph.pbtxt')
+
+    for f in os.listdir(extras_path):
+        if f.startswith('events.out'):
+            extras.append(extras_path / f)
+
+    for f in os.listdir(extras_path / 'eval_0'):
+        if f.startswith('events.out'):
+            extras.append(extras_path / 'eval_0' / f)
+
     return extras
 
 # stdout redirection found at https://codingdose.info/2018/03/22/supress-print-output-in-python/
