@@ -8,3 +8,4 @@ lxml
 jupyter
 numpy
 cython
+comet_ml

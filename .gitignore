@@ -1,6 +1,7 @@
 # vscode bs
 settings.json
 .DS_Store
+.env
 
 # plugin requirements files
 **/requirements.txt

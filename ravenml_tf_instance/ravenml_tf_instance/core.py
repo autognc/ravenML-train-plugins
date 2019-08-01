@@ -9,6 +9,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from comet_ml import Experiment
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -25,12 +27,10 @@ from ravenml.options import verbose_opt
 from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
-from ravenml.utils.question import cli_spinner, Spinner, user_selects 
+from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
 from google.protobuf import text_format
-from object_detection import exporter
-from object_detection.protos import pipeline_pb2
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -38,7 +38,10 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
 # put any custom Click options you create here
-
+comet_opt = click.option(
+    '-c', '--comet', is_flag=True,
+    help='Enable comet on this training run.'
+)
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with instance segmentation.')
@@ -47,11 +50,12 @@ def tf_instance(ctx):
     pass
     
 @tf_instance.command(help='Train a model.')
+@comet_opt
 @verbose_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool):
+def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -68,6 +72,10 @@ def train(ctx, train: TrainInput, verbose: bool):
     # create training metadata dict and populate with basic information
     metadata = {}
     fill_basic_metadata(metadata, train.dataset)
+
+    experiment = None
+    if comet:
+        experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
 
     # set base directory for model artifacts 
     base_dir = instance_cache.path / 'temp' if train.artifact_path is None \
@@ -96,6 +104,14 @@ def train(ctx, train: TrainInput, verbose: bool):
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
+        
+    if comet:
+        name = user_input('What would you like to name the comet experiment?:')
+        experiment.set_name(name)
+        experiment.log_parameters(metadata['hyperparameters'])
+        experiment.set_git_metadata()
+        experiment.set_os_packages()
+        experiment.set_pip_packages()
     
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
@@ -255,9 +271,13 @@ def _import_od():
     # import tensorflow as tf
     # from object_detection import model_hparams
     # from object_detection import model_lib
+    # from object_detection import exporter
+    # from object_detection.protos import pipeline_pb2
     _dynamic_import('tensorflow', 'tf')
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
     _dynamic_import('object_detection.model_lib', 'model_lib')
+    _dynamic_import('object_detection.exporter', 'exporter')
+    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
