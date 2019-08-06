@@ -21,6 +21,7 @@ import sys
 import yaml
 import importlib
 import re
+from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
@@ -30,6 +31,8 @@ from ravenml.data.interfaces import Dataset
 from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
+import ravenml_tf_instance.validation.utils as utils
+import ravenml_tf_instance.validation.stats as stats
 from google.protobuf import text_format
 
 # regex to ignore 0 indexed checkpoints
@@ -43,6 +46,11 @@ comet_opt = click.option(
     help='Enable comet on this training run.'
 )
 
+validate_opt = click.option(
+    '--validate', is_flag=True,
+    help='Automatically run validation after training.'
+)
+
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with instance segmentation.')
 @click.pass_context
@@ -50,12 +58,13 @@ def tf_instance(ctx):
     pass
     
 @tf_instance.command(help='Train a model.')
+@validate_opt
 @comet_opt
 @verbose_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, comet: bool):
+def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -72,10 +81,6 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     # create training metadata dict and populate with basic information
     metadata = {}
     fill_basic_metadata(metadata, train.dataset)
-
-    experiment = None
-    if comet:
-        experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
 
     # set base directory for model artifacts 
     base_dir = instance_cache.path / 'temp' if train.artifact_path is None \
@@ -105,7 +110,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
         
+    experiment = None
     if comet:
+        experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
         name = user_input('What would you like to name the comet experiment?:')
         experiment.set_name(name)
         experiment.log_parameters(metadata['hyperparameters'])
@@ -146,14 +153,17 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         final_exporter_name='exported_model',
         eval_on_train_data=False)
 
-    # actually train
-    progress = Spinner('Training model...', 'magenta')
-    if not verbose:
-        progress.start()
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-    if not verbose:
-        progress.succeed('Training model...Complete.')
-    
+    with ExitStack() as stack:
+        if comet:
+            stack.enter_context(experiment.train())
+        # actually train
+        progress = Spinner('Training model...', 'magenta')
+        if not verbose:
+            progress.start()
+        tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
+        if not verbose:
+            progress.succeed('Training model...Complete.')
+        
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
     
@@ -161,7 +171,53 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
+    
+    if validate:
+        with ExitStack() as stack:
+            if comet:
+                stack.enter_context(experiment.validate())
+                
+            label_path = extra_files[-1]
+            dev_path = train.dataset.path / 'splits/standard/dev'
+            output_path = base_dir / 'validation'
 
+            save_visualizations = False
+
+            category_index = utils.get_categories(str(label_path))
+            print("loaded label map")
+
+            image_paths, mask_paths, metadata_paths = utils.get_image_paths(dev_path)
+            print("loaded image paths")
+
+            images = utils.load_images_from_paths(image_paths)
+            print("loaded images into array")
+
+            masks = utils.load_masks_from_paths(mask_paths)
+            print("loaded masks into array")
+
+            all_truths = utils.get_truth_masks(masks, category_index)
+            print("calculated truth values from masks")
+
+            graph = utils.get_defualt_graph(model_path)
+            print("loaded model graph")
+
+            print("running inference for {} images..".format(str(len(images))))
+            outputs, times = utils.run_inference_for_multiple_images(images, graph)
+            print("inference done")
+
+            all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
+            print("converted inference outputs to detected objects")
+
+            confidence, recall, precision, iou = stats.calculate_statistics(all_truths, all_detections)
+
+            stats.write_stats_to_json(confidence, recall, precision, iou, times, category_index, output_path)
+
+            if save_visualizations:
+                utils.visualize_and_save(images, all_detections, output_path)
+                print("saved all visualizations")
+                
+            extra_files.append(output_path / 'stats.json')
+                    
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
     
@@ -212,7 +268,6 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras.append(pipeline_path)
     extras.append(extras_path / 'graph.pbtxt')
     extras.append(saved_model_path)
-    extras.append(labels_path)
 
     # path to exported frozen inference model
     frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
@@ -226,6 +281,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
         if f.startswith('events.out'):
             extras.append(extras_path / 'eval_0' / f)
 
+    extras.append(labels_path)
     return extras, frozen_graph_path
 
 
