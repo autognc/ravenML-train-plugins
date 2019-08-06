@@ -198,7 +198,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
             all_truths = utils.get_truth_masks(masks, category_index)
             print("calculated truth values from masks")
 
-            graph = utils.get_defualt_graph(model_path)
+            graph = utils.get_defualt_graph(str(model_path))
             print("loaded model graph")
 
             print("running inference for {} images..".format(str(len(images))))
