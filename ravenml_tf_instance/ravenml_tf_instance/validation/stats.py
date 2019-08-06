@@ -59,8 +59,6 @@ def calculate_statistics(all_truths, all_detections):
         
         # get precision values
         for class_id in detected:
-            
-            
             if truth.get(class_id) is None:
                 precision[class_id] += 1
 
@@ -75,12 +73,20 @@ def write_stats_to_json(confidence, recall, precision, iou, times, category_inde
     stats['inference_time_avg'] = round(sum(times[1:]) / len(times[1:]), 3)
 
     for class_id in category_index:
-        
-        num_instances = len(confidence[class_id])
-        avg_confidence = round(np.average(confidence[class_id]), 3)
-        recall_stat = round(recall[class_id] / len(confidence[class_id]), 3)
-        precision_stat = round(len(confidence[class_id]) / (len(confidence[class_id]) + precision[class_id]), 3)
-        avg_iou = round(np.average(iou[class_id]), 3)
+
+        if confidence.get(class_id) is not None:
+            num_instances = len(confidence[class_id])
+            avg_confidence = round(np.average(confidence[class_id]), 3)
+            recall_stat = round(recall[class_id] / len(confidence[class_id]), 3)
+            precision_stat = round(len(confidence[class_id]) / (len(confidence[class_id]) + precision[class_id]), 3)
+            avg_iou = round(np.average(iou[class_id]), 3)
+
+        else:
+            num_instances = 0
+            avg_confidence = 0.000
+            recall_stat = 0.000
+            precision_stat = 0.000
+            avg_iou = 0.000
         
         class_stat = {"num_instances": num_instances,
                       "avg_confidence": avg_confidence,

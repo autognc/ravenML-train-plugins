@@ -209,8 +209,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
             print("converted inference outputs to detected objects")
 
             confidence, recall, precision, iou = stats.calculate_statistics(all_truths, all_detections)
+            print('calculated model performance')
 
             stats.write_stats_to_json(confidence, recall, precision, iou, times, category_index, output_path)
+            print('wrote model performance to json file')
 
             if save_visualizations:
                 utils.visualize_and_save(images, all_detections, output_path)
