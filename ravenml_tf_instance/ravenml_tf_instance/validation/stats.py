@@ -24,6 +24,9 @@ def calculate_statistics(all_truths, all_detections):
 
     for truth, detected in zip(all_truths, all_detections):
 
+        for class_id in detected:
+            precision[class_id] = 0
+
         # get recall and confidence values
         for class_id in truth:
             precision[class_id] = 0
