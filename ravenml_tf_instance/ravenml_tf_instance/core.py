@@ -9,6 +9,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from comet_ml import Experiment
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -19,18 +21,19 @@ import sys
 import yaml
 import importlib
 import re
+from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
 from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
-from ravenml.utils.question import cli_spinner, Spinner, user_selects 
+from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_instance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
+import ravenml_tf_instance.validation.utils as utils
+import ravenml_tf_instance.validation.stats as stats
 from google.protobuf import text_format
-from object_detection import exporter
-from object_detection.protos import pipeline_pb2
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -38,7 +41,15 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
 # put any custom Click options you create here
+no_comet_opt = click.option(
+    '-c', '--no-comet', is_flag=True,
+    help='Disable comet on this training run.'
+)
 
+no_validate_opt = click.option(
+    '--no-validate', is_flag=True,
+    help='Do not automatically run validation after training.'
+)
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with instance segmentation.')
@@ -47,11 +58,13 @@ def tf_instance(ctx):
     pass
     
 @tf_instance.command(help='Train a model.')
+@no_validate_opt
+@no_comet_opt
 @verbose_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool):
+def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -96,6 +109,16 @@ def train(ctx, train: TrainInput, verbose: bool):
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
+        
+    experiment = None
+    if not no_comet:
+        experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
+        name = user_input('What would you like to name the comet experiment?:')
+        experiment.set_name(name)
+        experiment.log_parameters(metadata['hyperparameters'])
+        experiment.set_git_metadata()
+        experiment.set_os_packages()
+        experiment.set_pip_packages()
     
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
@@ -130,14 +153,17 @@ def train(ctx, train: TrainInput, verbose: bool):
         final_exporter_name='exported_model',
         eval_on_train_data=False)
 
-    # actually train
-    progress = Spinner('Training model...', 'magenta')
-    if not verbose:
-        progress.start()
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-    if not verbose:
-        progress.succeed('Training model...Complete.')
-    
+    with ExitStack() as stack:
+        if not no_comet:
+            stack.enter_context(experiment.train())
+        # actually train
+        progress = Spinner('Training model...', 'magenta')
+        if not verbose:
+            progress.start()
+        tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
+        if not verbose:
+            progress.succeed('Training model...Complete.')
+        
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
     
@@ -145,7 +171,58 @@ def train(ctx, train: TrainInput, verbose: bool):
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
+    
+    if not no_validate:
+        with ExitStack() as stack:
+            if not no_comet:
+                stack.enter_context(experiment.validate())
+                
+            label_path = extra_files[-1]
+            dev_path = train.dataset.path / 'splits/standard/dev'
+            output_path = base_dir / 'validation'
 
+            save_visualizations = False
+
+            category_index = utils.get_categories(str(label_path))
+            print("loaded label map")
+
+            image_paths, mask_paths, metadata_paths, color_paths = utils.get_image_paths(dev_path)
+            print("loaded image paths")
+
+            images = utils.load_images_from_paths(image_paths)
+            print("loaded images into array")
+
+            masks = utils.load_masks_from_paths(mask_paths)
+            print("loaded masks into array")
+
+            colors = utils.load_colors_from_path(color_paths, category_index)
+            print("loaded color labels into array")
+
+            all_truths = utils.get_truth_masks(masks, colors, category_index)
+            print("calculated truth values from masks")
+
+            graph = utils.get_default_graph(str(model_path))
+            print("loaded model graph")
+
+            print("running inference for {} images..".format(str(len(images))))
+            outputs, times = utils.run_inference_for_multiple_images(images, graph)
+            print("inference done")
+
+            all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
+            print("converted inference outputs to detected objects")
+
+            confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
+            print('calculated model performance')
+
+            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
+            print('wrote model performance to json file')
+
+            if save_visualizations:
+                utils.visualize_and_save(images, all_detections, output_path)
+                print("saved all visualizations")
+                
+            extra_files.append(output_path / 'stats.json')
+                    
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
     
@@ -196,7 +273,6 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras.append(pipeline_path)
     extras.append(extras_path / 'graph.pbtxt')
     extras.append(saved_model_path)
-    extras.append(labels_path)
 
     # path to exported frozen inference model
     frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
@@ -210,6 +286,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
         if f.startswith('events.out'):
             extras.append(extras_path / 'eval_0' / f)
 
+    extras.append(labels_path)
     return extras, frozen_graph_path
 
 
@@ -255,9 +332,13 @@ def _import_od():
     # import tensorflow as tf
     # from object_detection import model_hparams
     # from object_detection import model_lib
+    # from object_detection import exporter
+    # from object_detection.protos import pipeline_pb2
     _dynamic_import('tensorflow', 'tf')
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
     _dynamic_import('object_detection.model_lib', 'model_lib')
+    _dynamic_import('object_detection.exporter', 'exporter')
+    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
