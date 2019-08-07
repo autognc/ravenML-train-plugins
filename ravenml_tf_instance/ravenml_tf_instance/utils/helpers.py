@@ -62,6 +62,16 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         ids = [line for line in f if "id:" in line]
         num_classes = len(ids)
 
+    # get num eval examples from file
+    num_eval_file = data_path / 'splits/standard/train/test.record.numexamples'
+    try:
+        with open(num_eval_file, "r") as f:
+            lines = f.readlines()
+            num_eval_examples = int(lines[0])
+
+    except:
+        num_eval_examples = 1
+
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
     # model_folder = models_folder / 'model'
@@ -114,19 +124,22 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         formatted = '<replace_' + key + '>'
         pipeline_contents = pipeline_contents.replace(formatted, str(value))
 
-    # insert num clases into config file
+    # insert num classes into config file
     pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
+
+    # insert num eval examples into config file
+    pipeline_contents = pipeline_contents.replace('<replace_num_eval_examples>', str(num_eval_examples))
 
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
         file.write(pipeline_contents)
     
     # place TF record files into training directory
-    # TODO: change to move all sharded chunks
-    train_record = data_path / 'splits/standard/train/train.record-00000-of-00001'
-    test_record = data_path / 'splits/standard/train/test.record-00000-of-00001'
-    shutil.copy(train_record, base_dir / 'data')
-    shutil.copy(test_record, base_dir / 'data')
+    records_path = data_path / 'splits/standard/train'
+    for record_file in os.listdir(records_path):
+        if record_file.startswith('test.record-') or record_file.startswith('train.record-'):
+            file_path = records_path / record_file
+            shutil.copy(file_path, base_dir / 'data')
 
     # copy model checkpoints to our train folder
     checkpoint_folder = arch_path
