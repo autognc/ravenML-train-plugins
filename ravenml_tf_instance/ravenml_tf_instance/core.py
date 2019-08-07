@@ -41,14 +41,14 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
 # put any custom Click options you create here
-comet_opt = click.option(
-    '-c', '--comet', is_flag=True,
-    help='Enable comet on this training run.'
+no_comet_opt = click.option(
+    '-c', '--no-comet', is_flag=True,
+    help='Disable comet on this training run.'
 )
 
-validate_opt = click.option(
-    '--validate', is_flag=True,
-    help='Automatically run validation after training.'
+no_validate_opt = click.option(
+    '--no-validate', is_flag=True,
+    help='Do not automatically run validation after training.'
 )
 
 ### COMMANDS ###
@@ -58,13 +58,13 @@ def tf_instance(ctx):
     pass
     
 @tf_instance.command(help='Train a model.')
-@validate_opt
-@comet_opt
+@no_validate_opt
+@no_comet_opt
 @verbose_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
+def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -111,7 +111,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
         ctx.exit('Training cancelled.')
         
     experiment = None
-    if comet:
+    if not no_comet:
         experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
         name = user_input('What would you like to name the comet experiment?:')
         experiment.set_name(name)
@@ -154,7 +154,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
         eval_on_train_data=False)
 
     with ExitStack() as stack:
-        if comet:
+        if not no_comet:
             stack.enter_context(experiment.train())
         # actually train
         progress = Spinner('Training model...', 'magenta')
@@ -172,9 +172,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
     model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
     
-    if validate:
+    if not no_validate:
         with ExitStack() as stack:
-            if comet:
+            if not no_comet:
                 stack.enter_context(experiment.validate())
                 
             label_path = extra_files[-1]
