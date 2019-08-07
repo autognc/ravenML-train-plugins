@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 import itertools
+import csv
 
 import numpy as np
 from PIL import Image
@@ -46,13 +47,11 @@ def get_image_paths(dev_path):
     image_paths = []
     mask_paths = []
     metadata_paths = []
+    color_paths = []
 
     for item in os.listdir(dev_path):
         if item.startswith('image'):
             image_paths.append(os.path.join(dev_path, item))
-            
-        if len(image_paths) == 20:
-            break
 
     for impath in image_paths:
 
@@ -60,11 +59,13 @@ def get_image_paths(dev_path):
         uid = imname.split('_')[1].split('.')[0]
         mask_name = "mask_{}.png".format(uid)
         meta_name = "meta_{}.json".format(uid)
+        color_name = "labels_{}.csv".format(uid)
         
         mask_paths.append(os.path.join(dev_path, mask_name))
         metadata_paths.append(os.path.join(dev_path, meta_name))
+        color_paths.append(os.path.join(dev_path, color_name))
 
-    return image_paths, mask_paths, metadata_paths
+    return image_paths, mask_paths, metadata_paths, color_paths
 
 
 def load_images_from_paths(image_paths):
@@ -88,8 +89,33 @@ def load_masks_from_paths(mask_paths):
 
     return masks
 
+def load_colors_from_path(color_paths, category_index):
+    colors = []
 
-def get_defualt_graph(model_path):
+
+    for color_path in color_paths:
+        reader = csv.DictReader(open(color_path))
+
+        temp = {}
+        color = {}
+        for row in reader:
+            key = row['label']
+            val = [int(row['B']), int(row['G']), int(row['R'])]
+            
+            temp[key] = val
+
+        for class_id in category_index:
+            name = category_index[class_id]['name']
+
+            if name in temp:
+                color[class_id] = temp[name]
+
+        colors.append(color)
+
+    return colors
+
+
+def get_default_graph(model_path):
 
     detection_graph = tf.Graph()
 
@@ -206,22 +232,24 @@ def visualize_and_save(images, all_detections, output_path):
                 plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
 
 
-def get_truth_masks(masks, category_index):
+def get_truth_masks(masks, colors, category_index):
     
-    colors = {1:[192, 196, 207], 2:[194, 196, 1], 3:[198, 1, 10], 4:[1, 200, 25]}
     x = [-3, -2 -1, 0, 1, 2, 3]
     iters = [p for p in itertools.product(x, repeat=3)]
 
     all_truths = []
 
-    for mask in masks:
+    for mask, color in zip(masks, colors):
+
+        # leave until mask colors are fixed in csv
+        color = {1:[191, 195, 206], 2:[193, 195, 1], 3:[198, 0, 9], 4:[0, 199, 24]}
         truths = {}
         for class_id in category_index:
-            color = colors[class_id]
+            class_color = color[class_id]
             matched = False
             empty_mask = np.zeros(mask.shape[:2], dtype=np.uint8)
             for i in iters:
-                c = np.add(color, np.array(i))
+                c = np.add(np.array(class_color), np.array(i))
                 match = np.where((mask == c).all(axis=2))
                 y, x = match
                 if len(y) != 0 and len(x) != 0:

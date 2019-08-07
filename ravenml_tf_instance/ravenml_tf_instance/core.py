@@ -186,7 +186,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
             category_index = utils.get_categories(str(label_path))
             print("loaded label map")
 
-            image_paths, mask_paths, metadata_paths = utils.get_image_paths(dev_path)
+            image_paths, mask_paths, metadata_paths, color_paths = utils.get_image_paths(dev_path)
             print("loaded image paths")
 
             images = utils.load_images_from_paths(image_paths)
@@ -195,10 +195,13 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
             masks = utils.load_masks_from_paths(mask_paths)
             print("loaded masks into array")
 
-            all_truths = utils.get_truth_masks(masks, category_index)
+            colors = utils.load_colors_from_path(color_paths, category_index)
+            print("loaded color labels into array")
+
+            all_truths = utils.get_truth_masks(masks, colors, category_index)
             print("calculated truth values from masks")
 
-            graph = utils.get_defualt_graph(str(model_path))
+            graph = utils.get_default_graph(str(model_path))
             print("loaded model graph")
 
             print("running inference for {} images..".format(str(len(images))))
@@ -208,10 +211,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, validate: bool):
             all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
             print("converted inference outputs to detected objects")
 
-            confidence, recall, precision, iou = stats.calculate_statistics(all_truths, all_detections)
+            confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
             print('calculated model performance')
 
-            stats.write_stats_to_json(confidence, recall, precision, iou, times, category_index, output_path)
+            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
             print('wrote model performance to json file')
 
             if save_visualizations:
