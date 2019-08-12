@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 import itertools
 import csv
+import json
 
 import numpy as np
 from PIL import Image
@@ -28,6 +29,7 @@ def get_num_classes(label_path):
 
 def load_image_into_numpy_array(image):
     (im_width, im_height) = image.size
+    image = image.convert('RGB')
     return np.array(image.getdata()).reshape(
         (im_height, im_width, 3)).astype(np.uint8)
 
@@ -89,7 +91,7 @@ def load_masks_from_paths(mask_paths):
 
     return masks
 
-def load_colors_from_path(color_paths, category_index):
+def load_colors_from_paths(color_paths, category_index):
     colors = []
 
 
@@ -100,12 +102,15 @@ def load_colors_from_path(color_paths, category_index):
         color = {}
         for row in reader:
             key = row['label']
-            val = [int(row['B']), int(row['G']), int(row['R'])]
+            val = [int(row['R']), int(row['G']), int(row['B'])]
             
             temp[key] = val
 
         for class_id in category_index:
             name = category_index[class_id]['name']
+
+            if name == "solar_panel":
+                color[class_id] = [temp['panel_left'], temp['panel_right']]
 
             if name in temp:
                 color[class_id] = temp[name]
@@ -113,6 +118,30 @@ def load_colors_from_path(color_paths, category_index):
         colors.append(color)
 
     return colors
+
+def load_centroids_from_paths(metadata_paths, category_index):
+    centroids = []
+
+    for meta_path in metadata_paths:
+        centroid = {}
+        with open(meta_path) as jf:
+            data = json.load(jf)
+
+            for class_id in category_index:
+                if category_index[class_id]['name'] == 'barrel':
+                    centroid[class_id] = tuple(data['truth_centroids']['barrel_center'])
+                
+                elif category_index[class_id]['name'] == 'solar_panel':
+                    left = tuple(data['truth_centroids']['panel_left'])
+                    right = tuple(data['truth_centroids']['panel_right'])
+                    centroid[class_id] = [left, right]
+
+                else:
+                    centroid[class_id] = None
+
+        centroids.append(centroid)
+
+    return centroids
 
 
 def get_default_graph(model_path):
@@ -194,12 +223,22 @@ def convert_inference_output_to_detected_objects(category_index, outputs):
         for i in range(len(output['detection_scores'])):
             score = output['detection_scores'][i]
             class_id = output['detection_classes'][i]
-            if score > 0.5 and detections.get(class_id) is None:
-                class_name = category_index[class_id]['name']
-                box = output['detection_boxes'][i]
-                mask = output['detection_masks'][i]
-                detections[class_id] = DetectedClass(class_id, class_name, round(100 * score, 3), box, mask)
+            class_name = category_index[class_id]['name']
 
+            if score > 0.5:
+                if detections.get(class_id) is None:
+                    box = output['detection_boxes'][i]
+                    mask = output['detection_masks'][i]
+
+                    if class_name == 'solar_panel':
+                        detections[class_id] = [DetectedClass(class_id, class_name, round(100 * score, 3), box, mask)]
+                    else:
+                        detections[class_id] = DetectedClass(class_id, class_name, round(100 * score, 3), box, mask)
+
+                elif class_name == 'solar_panel' and len(detections.get(class_id)) == 1:
+                    box = output['detection_boxes'][i]
+                    mask = output['detection_masks'][i]
+                    detections[class_id].append(DetectedClass(class_id, class_name, round(100 * score, 3), box, mask))
 
         all_detections.append(detections)
 
@@ -207,59 +246,135 @@ def convert_inference_output_to_detected_objects(category_index, outputs):
     return all_detections
 
 
-def visualize_and_save(images, all_detections, output_path):
-
+def detected_visualize_and_save(images, all_detections, output_path):
     for image_idx in range(len(all_detections)):
 
-
-        dirpath = Path(output_path) / 'viz' / str(image_idx)
+        dirpath = Path(output_path) / 'viz' / 'detected' / str(image_idx)
         os.makedirs(dirpath, exist_ok=True)
 
         for class_id in all_detections[image_idx]:
             data = all_detections[image_idx][class_id]
-            fig = plt.figure()
-            
-            if data.centroid is not None:
+
+            if type(data) is list:
+                count = 1
+                for d in data:
+                    fig = plt.figure()
+                    plt.axis('off')
+                    plt.imshow(d.mask)
+                    plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
+                    plt.scatter(d.centroid[1], d.centroid[0], color='r')
+                    plt.text(7, 15, d.class_name + ': ' + str(round(100 * d.score, 2)), c='w')
+
+                    figname = 'panel_{}.png'.format(str(count))
+                    figpath = dirpath / figname
+
+                    plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+
+                    count += 1
+
+            elif data.centroid is not None:
+                fig = plt.figure()
                 plt.axis('off')
                 plt.imshow(data.mask)
                 plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
                 plt.scatter(data.centroid[1], data.centroid[0], color='r')
                 plt.text(7, 15, data.class_name + ': ' + str(round(100 * data.score, 2)), c='w')
-                
+
+                figname = "_".join(i for i in data.class_name.lower().split(" ")) + '.png'
+                figpath = dirpath / figname
+
+                plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+
+def truth_visualize_and_save(images, all_truths, output_path):
+
+    for image_idx in range(len(all_truths)):
+
+        dirpath = Path(output_path) / 'viz' / 'truth' / str(image_idx)
+        os.makedirs(dirpath, exist_ok=True)
+
+        for class_id in all_truths[image_idx]:
+            data = all_truths[image_idx][class_id]
+
+            if type(data) is list:
+                count = 1
+                for d in data:
+                    fig = plt.figure()
+                    plt.axis('off')
+                    plt.imshow(d.mask)
+                    plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
+                    plt.scatter(d.centroid[1], d.centroid[0], color='r')
+                    plt.text(7, 15, d.class_name, c='w')
+
+                    figname = 'panel_{}.png'.format(str(count))
+                    figpath = dirpath / figname
+
+                    plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                    
+                    count += 1
+
+            elif data.centroid is not None:
+                fig = plt.figure()
+                plt.axis('off')
+                plt.imshow(data.mask)
+                plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
+                plt.scatter(data.centroid[1], data.centroid[0], color='r')
+                plt.text(7, 15, data.class_name, c='w')
+
                 figname = "_".join(i for i in data.class_name.lower().split(" ")) + '.png'
                 figpath = dirpath / figname
 
                 plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
 
 
-def get_truth_masks(masks, colors, category_index):
+def get_truth_masks(masks, colors, centroids, category_index):
     
-    x = [-3, -2 -1, 0, 1, 2, 3]
-    iters = [p for p in itertools.product(x, repeat=3)]
-
     all_truths = []
 
-    for mask, color in zip(masks, colors):
+    for mask, color, centroid in zip(masks, colors, centroids):
 
         # leave until mask colors are fixed in csv
-        color = {1:[191, 195, 206], 2:[193, 195, 1], 3:[198, 0, 9], 4:[0, 199, 24]}
+        #color = {1:[191, 195, 206], 2:[193, 195, 1], 3:[198, 0, 9], 4:[0, 199, 24]}
         truths = {}
         for class_id in category_index:
             class_color = color[class_id]
-            matched = False
-            empty_mask = np.zeros(mask.shape[:2], dtype=np.uint8)
-            for i in iters:
-                c = np.add(np.array(class_color), np.array(i))
-                match = np.where((mask == c).all(axis=2))
+            class_name = category_index[class_id]['name']
+            class_cen = centroid[class_id]
+
+            if class_name == 'solar_panel':
+
+                for c, cen in zip(class_color, class_cen):
+                    matched = False
+                    empty_mask = np.zeros(mask.shape[:2], dtype=np.uint8)
+                    match = np.where((mask == c).all(axis=2))
+                    y, x = match
+                    if len(y) != 0 and len(x) != 0:
+
+                        empty_mask[match] = 1
+                        matched = True
+
+                    if matched:
+                        if truths.get(class_id) is None:
+                            truth = TruthClass(class_id, category_index[class_id]['name'], empty_mask, cen)
+                            truths[class_id] = [truth]
+
+                        else:
+                            truth = TruthClass(class_id, category_index[class_id]['name'], empty_mask, cen)
+                            truths[class_id].append(truth)
+
+            
+            else:
+                matched = False
+                empty_mask = np.zeros(mask.shape[:2], dtype=np.uint8)
+                match = np.where((mask == class_color).all(axis=2))
                 y, x = match
                 if len(y) != 0 and len(x) != 0:
 
                     empty_mask[match] = 1
                     matched = True
 
-            if matched:
-                truth = TruthClass(class_id, category_index[class_id]['name'], empty_mask)
-                truths[class_id] = truth
+                if matched:
+                    truth = TruthClass(class_id, category_index[class_id]['name'], empty_mask, class_cen)
+                    truths[class_id] = truth
 
         all_truths.append(truths)
     
