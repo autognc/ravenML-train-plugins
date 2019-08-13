@@ -4,4 +4,8 @@ Momentum:
     dropout_keep_probability : 1.0
     l2_regularizer_weight : 0.0
     batch_size : 1
-    max_detections_per_class : 10
+    max_detections_per_class : 25
+    max_total_detections: 75
+    first_stage_max_proposals: 75
+    min_dimension: 400
+    max_dimension: 700

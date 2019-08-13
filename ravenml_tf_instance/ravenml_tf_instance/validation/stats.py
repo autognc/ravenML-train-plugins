@@ -54,12 +54,18 @@ def get_solar_iou(solar_truth, solar_detected):
 def get_scaled_dist(truth_cent, detected_cent, detected_size):
     d_h, d_w = detected_size
 
+    if truth_cent is None or detected_cent is None:
+        return 0
+    
     delta_y = (truth_cent[0] - detected_cent[0]) / d_h
     delta_x = (truth_cent[1] - detected_cent[1]) / d_w
     
     return round(math.sqrt( (delta_y**2)+(delta_x**2) ), 3)
 
 def get_dist(truth_cent, detected_cent):
+
+    if truth_cent is None or detected_cent is None:
+        return 0
     delta_y = (truth_cent[0] - detected_cent[0])
     delta_x = (truth_cent[1] - detected_cent[1])
     
