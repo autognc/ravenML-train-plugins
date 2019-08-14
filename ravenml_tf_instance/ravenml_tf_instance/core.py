@@ -222,6 +222,8 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
                 print("saved all visualizations")
                 
             extra_files.append(output_path / 'stats.json')
+            
+            experiment.log_asset(output_path / 'stats.json')
                     
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
