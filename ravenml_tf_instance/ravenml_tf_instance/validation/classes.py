@@ -3,8 +3,6 @@ import numpy as np
 class DetectedClass():
     def __init__(self, class_id, class_name, score, box, mask):
         self.class_id = class_id
-        if class_name == 'Cygnus':
-            class_name = 'Barrel'
         self.class_name = class_name
         self.score = score
         self.box = box
@@ -21,12 +19,8 @@ class DetectedClass():
 
 
 class TruthClass():
-    def __init__(self, class_id, class_name, mask):
+    def __init__(self, class_id, class_name, mask, centroid):
         self.class_id = class_id
-        if class_name == 'Cygnus':
-            class_name = 'Barrel'
         self.class_name = class_name
         self.mask = mask
-
-        # get centroid from metadata
-        self.centroid = None
+        self.centroid = centroid

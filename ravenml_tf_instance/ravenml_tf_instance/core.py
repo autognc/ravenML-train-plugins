@@ -181,7 +181,9 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             dev_path = train.dataset.path / 'splits/standard/dev'
             output_path = base_dir / 'validation'
 
-            save_visualizations = False
+            save_detected_visualizations = True
+            save_truth_visualizations = True
+
 
             category_index = utils.get_categories(str(label_path))
             print("loaded label map")
@@ -195,10 +197,13 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             masks = utils.load_masks_from_paths(mask_paths)
             print("loaded masks into array")
 
-            colors = utils.load_colors_from_path(color_paths, category_index)
+            colors = utils.load_colors_from_paths(color_paths, category_index)
             print("loaded color labels into array")
 
-            all_truths = utils.get_truth_masks(masks, colors, category_index)
+            centroids = utils.load_centroids_from_paths(metadata_paths, category_index)
+            print("loaded centroids into array")
+
+            all_truths = utils.get_truth_masks(masks, colors, centroids, category_index)
             print("calculated truth values from masks")
 
             graph = utils.get_default_graph(str(model_path))
@@ -211,15 +216,19 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
             print("converted inference outputs to detected objects")
 
-            confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
+            confidence, accuracy, recall, precision, iou, parameters, centroid_dists, scaled_centroid_dists, dsp, tsp = stats.calculate_statistics(all_truths, all_detections, category_index)
             print('calculated model performance')
 
-            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
+            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, centroid_dists, scaled_centroid_dists, dsp, tsp, times, category_index, output_path)
             print('wrote model performance to json file')
 
-            if save_visualizations:
-                utils.visualize_and_save(images, all_detections, output_path)
-                print("saved all visualizations")
+            if save_detected_visualizations:
+                utils.detected_visualize_and_save(images, all_detections, output_path)
+                print("saved detected visualizations")
+
+            if save_truth_visualizations:
+                utils.truth_visualize_and_save(images, all_truths, output_path)
+                print("saved truth visualizations")
                 
             extra_files.append(output_path / 'stats.json')
             
