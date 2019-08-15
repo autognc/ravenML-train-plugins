@@ -3,6 +3,7 @@ import yaml
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from datetime import datetime
+from pathlib import Path
 import glob
 import sys
 import re
@@ -33,7 +34,7 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     from deeplab import train as deeplab_train
 
     # set base directory for model artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab') if train.artifact_path is None \
+    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab').path if train.artifact_path is None \
         else train.artifact_path
 
     # set dataset directory
@@ -83,6 +84,7 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
 
     # fill metadata
     metadata = {
+        'architecture': 'deeplab',
         'date_started_at': datetime.utcnow().isoformat() + "Z",
         'dataset_used': train.dataset.metadata,
         'num_classes': num_classes,
@@ -108,7 +110,7 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
 
     # return TrainOutput
     model_path = artifact_dir / "checkpoint"
-    checkpoint_files = glob.glob(str(artifact_dir.absolute() / "*"))
+    checkpoint_files = list(map(Path, (glob.glob(str(artifact_dir.absolute() / "*")))))
     return TrainOutput(metadata, artifact_dir, model_path, checkpoint_files, train.artifact_path is not None)
 
 
