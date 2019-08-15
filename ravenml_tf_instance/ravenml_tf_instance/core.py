@@ -223,11 +223,11 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             print('wrote model performance to json file')
 
             if save_detected_visualizations:
-                utils.detected_visualize_and_save(images, all_detections, output_path)
+                utils.detected_visualize_and_save(images, all_detections, output_path, experiment)
                 print("saved detected visualizations")
 
             if save_truth_visualizations:
-                utils.truth_visualize_and_save(images, all_truths, output_path)
+                utils.truth_visualize_and_save(images, all_truths, output_path, experiment)
                 print("saved truth visualizations")
                 
             extra_files.append(output_path / 'stats.json')

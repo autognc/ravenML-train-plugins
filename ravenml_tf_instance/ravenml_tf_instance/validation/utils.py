@@ -246,8 +246,8 @@ def convert_inference_output_to_detected_objects(category_index, outputs):
     return all_detections
 
 
-def detected_visualize_and_save(images, all_detections, output_path):
-    for image_idx in range(len(all_detections)):
+def detected_visualize_and_save(images, all_detections, output_path, experiment):
+    for image_idx in range(0, len(all_detections), 20):
 
         dirpath = Path(output_path) / 'viz' / 'detected' / str(image_idx)
         os.makedirs(dirpath, exist_ok=True)
@@ -258,19 +258,21 @@ def detected_visualize_and_save(images, all_detections, output_path):
             if type(data) is list:
                 count = 1
                 for d in data:
-                    fig = plt.figure()
-                    plt.axis('off')
-                    plt.imshow(d.mask)
-                    plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
-                    plt.scatter(d.centroid[1], d.centroid[0], color='r')
-                    plt.text(7, 15, d.class_name + ': ' + str(round(100 * d.score, 2)), c='w')
+                    if d.centroid is not None:
+                        fig = plt.figure()
+                        plt.axis('off')
+                        plt.imshow(d.mask)
+                        plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
+                        plt.scatter(d.centroid[1], d.centroid[0], color='r')
+                        plt.text(7, 15, d.class_name + ': ' + str(round(100 * d.score, 2)), c='w')
 
-                    figname = 'panel_{}.png'.format(str(count))
-                    figpath = dirpath / figname
+                        figname = 'panel_{}.png'.format(str(count))
+                        figpath = dirpath / figname
 
-                    plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                        plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                        experiment.log_asset(figpath)
 
-                    count += 1
+                        count += 1
 
             elif data.centroid is not None:
                 fig = plt.figure()
@@ -284,10 +286,11 @@ def detected_visualize_and_save(images, all_detections, output_path):
                 figpath = dirpath / figname
 
                 plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                experiment.log_asset(figpath)
 
-def truth_visualize_and_save(images, all_truths, output_path):
+def truth_visualize_and_save(images, all_truths, output_path, experiment):
 
-    for image_idx in range(len(all_truths)):
+    for image_idx in range(0, len(all_truths), 20):
 
         dirpath = Path(output_path) / 'viz' / 'truth' / str(image_idx)
         os.makedirs(dirpath, exist_ok=True)
@@ -298,19 +301,20 @@ def truth_visualize_and_save(images, all_truths, output_path):
             if type(data) is list:
                 count = 1
                 for d in data:
-                    fig = plt.figure()
-                    plt.axis('off')
-                    plt.imshow(d.mask)
-                    plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
-                    plt.scatter(d.centroid[1], d.centroid[0], color='r')
-                    plt.text(7, 15, d.class_name, c='w')
+                    if d.centroid is not None:
+                        fig = plt.figure()
+                        plt.axis('off')
+                        plt.imshow(d.mask)
+                        plt.imshow(images[image_idx], cmap='jet', alpha=0.6)
+                        plt.scatter(d.centroid[1], d.centroid[0], color='r')
+                        plt.text(7, 15, d.class_name, c='w')
 
-                    figname = 'panel_{}.png'.format(str(count))
-                    figpath = dirpath / figname
+                        figname = 'panel_{}.png'.format(str(count))
+                        figpath = dirpath / figname
 
-                    plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
-                    
-                    count += 1
+                        plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                        experiment.log_asset(figpath)
+                        count += 1  
 
             elif data.centroid is not None:
                 fig = plt.figure()
@@ -324,6 +328,7 @@ def truth_visualize_and_save(images, all_truths, output_path):
                 figpath = dirpath / figname
 
                 plt.savefig(figpath, bbox_inches='tight', pad_inches=0)
+                experiment.log_asset(figpath)
 
 
 def get_truth_masks(masks, colors, centroids, category_index):
