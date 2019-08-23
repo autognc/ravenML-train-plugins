@@ -13,6 +13,51 @@ import shutil
 from ravenml.utils.local_cache import LocalCache, global_cache
 
 
+def parse_config(path):
+    result = {}
+    with open(path, 'r') as f:
+        args = yaml.safe_load(f)
+    for arg in args:
+        arg = list(arg.items())
+        if len(arg) > 1:
+            raise ValueError("Invalid config file, please only specify one key-value pair per list item")
+        result[arg[0][0]] = str(arg[0][1])
+    return result
+
+
+def parse_deeplab_args(args):
+    result = {}
+    for arg in args:
+        split = arg[2:].split("=")
+        if len(split) != 2:
+            raise ValueError(f"Improperly formatted deeplab arg {arg}, must be of form key=value")
+        result[split[0]] = split[1]
+    return result
+
+
+def setup_dataset(dataset_path):
+    from deeplab.datasets import data_generator
+    # read number of classes from Jigsaw label map, this is bad but I'm not gonna pull out
+    # a protobuf parser just to count the number of IDs
+    with open(Path(dataset_path) / "label_map.pbtxt", "r") as f:
+        ids = [line for line in f if "id:" in line]
+        num_classes = len(ids)
+
+    # set up data generator for our dataset
+    dataset_info = data_generator.DatasetDescriptor(
+        splits_to_sizes={
+            'train': -1,  # these aren't actually used
+            'test': -1,
+        },
+        num_classes=num_classes + 1,
+        ignore_label=0,
+    )
+    data_generator._DATASETS_INFORMATION['custom'] = dataset_info
+
+    return num_classes
+
+
+
 @click.group(help='TensorFlow Semantic Segmentation.')
 def tf_semantic():
     pass
@@ -30,7 +75,6 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     # by Click because the @pass_train decorator is set to ensure
     # object creation, after which the created object is passed as "train".
     # After training, create an instance of TrainOutput and return it
-    from deeplab.datasets import data_generator
     from deeplab import train as deeplab_train
 
     # set base directory for model artifacts
@@ -41,46 +85,15 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     data_dir = train.dataset.path / "splits" / "complete" / "train"
 
     # parse config file
-    config_opts = {}
-    if config is not None:
-        with open(config, 'r') as f:
-            try:
-                args = yaml.safe_load(f)
-            except yaml.YAMLError as e:
-                ctx.fail(str(e))
-        for arg in args:
-            arg = list(arg.items())
-            if len(arg) > 1:
-                ctx.fail("Invalid config file, please only specify one key-value pair per list item")
-            config_opts[arg[0][0]] = str(arg[0][1])
-
+    config_opts = parse_config(config)
     # parse extra deeplab args
-    extra_opts = {}
-    for arg in extra_deeplab_args:
-        split = extra_deeplab_args[2:].split("=")
-        if len(split) != 2:
-            ctx.fail(f"Improperly formatted deeplab arg {arg}")
-        extra_opts[split[0]] = split[1]
+    extra_opts = parse_deeplab_args(extra_deeplab_args)
 
     # union all options
     config_opts.update(extra_opts)
 
-    # read number of classes from Jigsaw label map, this is bad but I'm not gonna pull out
-    # a protobuf parser just to count the number of IDs
-    with open(train.dataset.path / "label_map.pbtxt", "r") as f:
-        ids = [line for line in f if "id:" in line]
-        num_classes = len(ids)
-
-    # set up data generator for our dataset
-    dataset_info = data_generator.DatasetDescriptor(
-        splits_to_sizes={
-            'train': -1,  # these aren't actually used
-            'val': -1,
-        },
-        num_classes=num_classes + 1,
-        ignore_label=0,
-    )
-    data_generator._DATASETS_INFORMATION['custom'] = dataset_info
+    # set up entry for "custom" dataset and load number of classes
+    num_classes = setup_dataset(train.dataset.path)
 
     # fill metadata
     metadata = {
@@ -113,6 +126,103 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     checkpoint_files = list(map(Path, (glob.glob(str(artifact_dir.absolute() / "*")))))
     return TrainOutput(metadata, artifact_dir, model_path, checkpoint_files, train.artifact_path is not None)
 
+
+@tf_semantic.command(help="Evaluate a model. Always use in local mode.", context_settings=dict(ignore_unknown_options=True))
+@pass_train
+@click.argument("checkpoint_dir", type=click.Path(exists=True))
+@click.option("--config", "-c", required=False, type=click.Path(exists=True),
+              help="Config file containing command-line parameters to deeplab/eval.py.")
+@click.argument('extra_deeplab_args', nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def eval(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
+    from deeplab import eval as deeplab_eval
+    from deeplab import common as deeplab_common
+
+    # stupid hack to prevent deeplab from skipping label reading when the split is called 'test'
+    deeplab_common.TEST_SET = None
+
+    # set base directory for eval artifacts
+    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab' / 'eval').path if train.artifact_path is None \
+        else train.artifact_path
+
+    # set dataset directory
+    data_dir = train.dataset.path / "splits" / "complete" / "train"
+
+    # parse config file
+    config_opts = parse_config(config)
+    # parse extra deeplab args
+    extra_opts = parse_deeplab_args(extra_deeplab_args)
+
+    # union all options
+    config_opts.update(extra_opts)
+
+    # set up entry for "custom" dataset
+    setup_dataset(train.dataset.path)
+
+    # fill sys.argv to be passed to deeplab
+    sys.argv = [sys.argv[0]]
+    sys.argv.append("--dataset=custom")
+    sys.argv.append(f"--dataset_dir={data_dir.absolute()}")
+    sys.argv.append(f"--eval_logdir={artifact_dir.absolute()}")
+    sys.argv.append(f"--checkpoint_dir={checkpoint_dir}")
+    sys.argv.append("--eval_split=test")
+    sys.argv += [f"--{key}={value}" for key, value in config_opts.items()]
+
+    # run deeplab
+    try:
+        with TFRecordFilenameConverter(data_dir.absolute()):
+            deeplab_eval.main(None)
+    except KeyboardInterrupt:
+        pass
+
+
+@tf_semantic.command(help="Visualize a model. Always use in local mode.", context_settings=dict(ignore_unknown_options=True))
+@pass_train
+@click.argument("checkpoint_dir", type=click.Path(exists=True))
+@click.option("--config", "-c", required=False, type=click.Path(exists=True),
+              help="Config file containing command-line parameters to deeplab/vis.py.")
+@click.argument('extra_deeplab_args', nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def vis(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
+    from deeplab import vis as deeplab_vis
+    from deeplab import common as deeplab_common
+
+    # stupid hack to prevent deeplab from skipping label reading when the split is called 'test'
+    deeplab_common.TEST_SET = None
+
+    # set base directory for eval artifacts
+    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab' / 'vis').path if train.artifact_path is None \
+        else train.artifact_path
+
+    # set dataset directory
+    data_dir = train.dataset.path / "splits" / "complete" / "train"
+
+    # parse config file
+    config_opts = parse_config(config)
+    # parse extra deeplab args
+    extra_opts = parse_deeplab_args(extra_deeplab_args)
+
+    # union all options
+    config_opts.update(extra_opts)
+
+    # set up entry for "custom" dataset
+    setup_dataset(train.dataset.path)
+
+    # fill sys.argv to be passed to deeplab
+    sys.argv = [sys.argv[0]]
+    sys.argv.append("--dataset=custom")
+    sys.argv.append(f"--dataset_dir={data_dir.absolute()}")
+    sys.argv.append(f"--vis_logdir={artifact_dir.absolute()}")
+    sys.argv.append(f"--checkpoint_dir={checkpoint_dir}")
+    sys.argv.append("--vis_split=test")
+    sys.argv += [f"--{key}={value}" for key, value in config_opts.items()]
+
+    # run deeplab
+    try:
+        with TFRecordFilenameConverter(data_dir.absolute()):
+            deeplab_vis.main(None)
+    except KeyboardInterrupt:
+        pass
 
 class TFRecordFilenameConverter:
     """
