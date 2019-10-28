@@ -7,6 +7,8 @@ import glob
 import tensorflow as tf
 import numpy as np
 import cv2
+import os
+import shutil
 
 from ravenml.utils.local_cache import LocalCache, global_cache
 from .train import FeaturePointsModel
@@ -19,11 +21,12 @@ def tf_feature_points():
 
 HYP_TO_USE = [
     {
-        'learning_rate': 2e-3,
-        'lr_decay_factor': 50,
+        'learning_rate': 4e-3,
+        'learning_rate_2': 1e-5,
+        'lr_decay_factor': 10,
         'dropout': 0.6,
         'batch_size': 128,
-        'optimizer': 'SGD',
+        'optimizer': 'RMSProp',
         'momentum': 0,
         'nesterov_momentum': True,
         'crop_size': 224,
@@ -37,7 +40,7 @@ HYP_TO_USE = [
         'lr_decay_factor': 20,
         'dropout': 0.6,
         'batch_size': 128,
-        'optimizer': 'SGD',
+        'optimizer': 'RMSProp',
         'momentum': 0,
         'nesterov_momentum': True,
         'crop_size': 224,
@@ -98,6 +101,10 @@ def train(ctx, train: TrainInput):
     with open(train.dataset.path / 'feature_points.json', 'r') as f:
         feature_points = json.load(f)
 
+    # load dataset mean and stdev
+    mean = np.load(str(train.dataset.path / 'mean.npy'))
+    stdev = np.load(str(train.dataset.path / 'stdev.npy'))
+
     for i, hp in enumerate(HYP_TO_USE):
         # fill metadata
         metadata = {
@@ -106,14 +113,17 @@ def train(ctx, train: TrainInput):
             #'dataset_used': train.dataset.metadata,
             'feature_points': feature_points
         }
-        trainer = FeaturePointsModel(data_dir, feature_points, hp)
+        trainer = FeaturePointsModel(data_dir, feature_points, mean, stdev, hp)
         metadata.update(trainer.hp)
 
         with open(artifact_dir / f'model_{i}.json', 'w') as f:
             json.dump(metadata, f, indent=2)
 
         # run training
-        model = trainer.train(logdir=str(artifact_dir / f'logs_{i}'))
+        logdir = str(artifact_dir / f'logs_{i}')
+        if os.path.exists(logdir):
+            shutil.rmtree(logdir)
+        model = trainer.train(logdir=logdir)
         model_path = artifact_dir / f'model_{i}.h5'
         model.save(str(model_path.absolute()))
 

@@ -15,7 +15,7 @@ class FeaturePointsModel:
         'crop_size': 224,
         'num_fine_tune_layers': 0,
         'epochs': 10,
-        'shuffle_buffer': 1024,
+        'shuffle_buffer': 4096,
         'regression_head_size': 1024,
         'classification_head_size': 256
     }
@@ -23,21 +23,31 @@ class FeaturePointsModel:
     OPTIMIZERS = {
         'SGD': lambda hp: tf.keras.optimizers.SGD(learning_rate=hp['learning_rate'], momentum=hp['momentum'], nesterov=hp['nesterov_momentum']),
         'Adam': lambda hp: tf.keras.optimizers.Adam(learning_rate=hp['learning_rate']),
-        'Adagrad': lambda hp: tf.keras.optimizers.Adagrad(learning_rate=hp['learning_rate'])
+        'Adagrad': lambda hp: tf.keras.optimizers.Adagrad(learning_rate=hp['learning_rate']),
+        'RMSProp': lambda hp: tf.keras.optimizers.RMSprop(learning_rate=hp['learning_rate'])
     }
 
     USED_FEATURE_POINTS = ['panel_left', 'panel_right', 'barrel_top', 'barrel_bottom']
     NUM_USED_FEATURE_POINTS = len(USED_FEATURE_POINTS)
 
-    def __init__(self, data_dir, feature_points, hp):
+    def __init__(self, data_dir, feature_points, mean, stdev, hp):
         """
         :param data_dir: path to data directory
+        :param mean: the mean of the entire dataset
+        :param stdev: the standard deviation of the entire dataset
         :param feature_points: list(str) of feature point names, in same order as they appear in the TFRecord
         :param hp: dictionary of hyperparameters, see DEFAULT_HYPERPARAMETERS for available ones
         """
         self.data_dir = data_dir
         self.feature_points = feature_points
-        self.hp = dict(self.DEFAULT_HYPERPARAMETERS, **hp)
+        # convert mean and stdev to channel-wise rather than pixel-wise
+        self.mean = np.mean(mean, axis=(0, 1))
+        self.stdev = np.sqrt(np.mean((mean - self.mean)**2, axis=(0, 1)) + np.mean(stdev**2, axis=(0, 1)))
+        # convert mean and stdev to the [-1, 1] format for convenience
+        self.mean = (self.mean - 127.5) / 127.5
+        self.stdev = self.stdev / (127.5**2)
+        self.hp = self.DEFAULT_HYPERPARAMETERS
+        self.hp.update(hp)
 
     def _get_dataset(self, split_name, train):
         """
@@ -123,7 +133,7 @@ class FeaturePointsModel:
                 image = (image + 1) / 2
 
                 # random multiple of 90 degree rotation
-                k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
+                """k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
                 cosx = (1 - k % 2) * (-(k % 4) + 1)
                 sinx = (k % 2) * (-(k % 4 - 1) + 1)
                 rot_matrix = tf.convert_to_tensor([[cosx, -sinx], [sinx, cosx]], dtype=tf.float32)
@@ -131,10 +141,10 @@ class FeaturePointsModel:
                 truth_points = tf.transpose(truth_points)
                 truth_points = tf.matmul(rot_matrix, truth_points - center) + center
                 truth_points = tf.transpose(truth_points)
-                image = tf.image.rot90(image, k)
+                image = tf.image.rot90(image, k)"""
 
-                image = tf.image.random_brightness(image, 0.1)
-                image = tf.image.random_saturation(image, 0.9, 1)
+                image = tf.image.random_brightness(image, 0.2)
+                image = tf.image.random_saturation(image, 0.8, 1.2)
                 image = tf.clip_by_value(image, 0, 1)
                 # convert back to [-1, 1]
                 image = image * 2 - 1
@@ -145,11 +155,12 @@ class FeaturePointsModel:
             #truth_points = tf.reshape(tf.transpose(truth_points), [self.NUM_USED_FEATURE_POINTS * 2])
 
             # figure out if the logos are facing the camera
-            theta = tf.asin(2 * (pose[0] * pose[2] - pose[1] * pose[3]))  # the theta Euler angle
-            logos_visible = tf.expand_dims(tf.cast(theta < 0, tf.float32), 0)  # 1 if they're facing the camera, 0 otherwise
+            """theta = tf.asin(2 * (pose[0] * pose[2] - pose[1] * pose[3]))  # the theta Euler angle
+            logos_visible = tf.expand_dims(tf.cast(theta < 0, tf.float32), 0)"""  # 1 if they're facing the camera, 0 otherwise
 
+            #image = (image - self.mean) / self.stdev
             image = tf.ensure_shape(image, [cropsize, cropsize, 3])
-            return image, (truth_points)#, logos_visible)
+            return image, pose#(truth_points)#, logos_visible)
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
             num_examples = int(f.read())
@@ -161,10 +172,12 @@ class FeaturePointsModel:
         train_dataset, num_train = self._get_dataset('train', True)
         train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer']).batch(self.hp['batch_size']).repeat()
         val_dataset, num_val = self._get_dataset('test', False)
-        val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
+        val_dataset = val_dataset.batch(self.hp['batch_size']).take(6).repeat()
         """for imb, fb in train_dataset:
             for im, f in zip(imb, fb):
-                im = (im.numpy() * 127.5 + 127.5).astype(np.uint8)
+                #im = (im.numpy() * self.stdev + self.mean) * 127.5 + 127.5
+                im = im.numpy() * 127.5 + 127.5
+                im = im.astype(np.uint8)
                 for feat in f.numpy():
                     cv2.circle(im, tuple(feat[::-1]), 5, (0, 0, 255), -1)
                 cv2.imshow('a', im)
@@ -172,14 +185,23 @@ class FeaturePointsModel:
 
         callbacks = []
         if logdir:
-            callbacks.append(tf.keras.callbacks.TensorBoard(log_dir=logdir, write_graph=False, update_freq='batch', profile_batch=0))
-        callbacks.append(tf.keras.callbacks.EarlyStopping(
+            callbacks.append(tf.keras.callbacks.TensorBoard(log_dir=logdir, write_graph=False, update_freq='batch', profile_batch=0, histogram_freq=5))
+        """callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='loss',
+            factor=0.2,
+            min_lr=1e-20,
+            patience=5,
+            min_delta=0.01,
+            mode='min',
+            verbose=1
+        ))"""
+        """callbacks.append(tf.keras.callbacks.EarlyStopping(
             monitor='val_loss',
             patience=5,
             verbose=1,
             mode='min',
-            min_delta=10
-        ))
+            min_delta=1
+        ))"""
         """callbacks.append(tf.keras.callbacks.ModelCheckpoint(
             'artifacts4/model.h5',
             monitor='val_loss',
@@ -187,63 +209,65 @@ class FeaturePointsModel:
             mode='min'
         ))"""
         model = self._get_model()
-        #model = tf.keras.models.load_model('artifacts4/model.h5', compile=False)
-        #model.trainable = True
+        # model = tf.keras.models.load_model('artifacts4/model.h5', compile=False)
+        # model.trainable = True
         model.summary()
-        #self.hp['learning_rate'] /= 10
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](self.hp)
-        loss_ratio = (self.hp['crop_size']**2 - 1) / 12
-        binary_crossentropy_loss = tf.keras.losses.BinaryCrossentropy(label_smoothing=0.2)
+        # loss_ratio = (self.hp['crop_size']**2 - 1) / 12
+        # binary_crossentropy_loss = tf.keras.losses.BinaryCrossentropy(label_smoothing=0.2)
         model.compile(
             optimizer=optimizer,
-            loss=[self.custom_mse_loss],#, binary_crossentropy_loss],
+            loss=[self.pose_loss],#, binary_crossentropy_loss],
             loss_weights=[1],#, loss_ratio],
             metrics=[
-                [self.average_distance_error] +
-                [self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
+                #[self.average_distance_error] +
+                #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
             ]#, ['accuracy']]
         )
         try:
             model.fit(
                 train_dataset,
-                epochs=100,#self.hp['epochs'],
-                steps_per_epoch=-(-num_train // self.hp['batch_size']),
+                epochs=50,#self.hp['epochs'],
+                #steps_per_epoch=-(-num_train // self.hp['batch_size']),
+                steps_per_epoch=20,
                 validation_data=val_dataset,
-                validation_steps=-(-num_val // self.hp['batch_size']),
+                validation_steps=6,
+                #validation_steps=-(-num_val // self.hp['batch_size']),
                 callbacks=callbacks
             )
         except:
             pass
 
-        ######################################################################################
         start_index = model.layers.index(model.get_layer('block_16_expand'))
         for layer in model.layers[start_index:]:
             layer.trainable = True
-        self.hp['learning_rate'] /= self.hp['lr_decay_factor']
+        #self.hp['learning_rate'] /= self.hp['lr_decay_factor']
+        self.hp['learning_rate'] = self.hp['learning_rate_2']
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](self.hp)
+        #optimizer = self.OPTIMIZERS['SGD'](self.hp)
         model.compile(
             optimizer=optimizer,
-            loss=[self.custom_mse_loss],#, binary_crossentropy_loss],
+            loss=[self.pose_loss],#, binary_crossentropy_loss],
             loss_weights=[1],#, loss_ratio],
-            metrics=[
-                [self.average_distance_error] +
-                [self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
-            ]#, ['accuracy']]
+            #metrics=[
+                #[self.average_distance_error] +
+                #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
+            #], ['accuracy']]
         )
         model.summary()
-        callbacks[-1] = tf.keras.callbacks.EarlyStopping(
+        """callbacks[-1] = tf.keras.callbacks.EarlyStopping(
             monitor='val_loss',
             patience=15,
             verbose=1,
             mode='min',
             min_delta=1
-        )
+        )"""
         model.fit(
             train_dataset,
-            epochs=100,#self.hp['epochs'],
-            steps_per_epoch=-(-num_train // self.hp['batch_size']),
+            epochs=50,#self.hp['epochs'],
+            steps_per_epoch=20,#-(-num_train // self.hp['batch_size']),
             validation_data=val_dataset,
-            validation_steps=-(-num_val // self.hp['batch_size']),
+            validation_steps=6,#-(-num_val // self.hp['batch_size']),
             callbacks=callbacks
         )
         return model
@@ -259,23 +283,29 @@ class FeaturePointsModel:
                 layer.trainable = False
         else:
             mobilenet.trainable = False
-        feature_map = tf.keras.layers.Flatten()(mobilenet.get_layer('block_8_expand_relu').output)
+        feature_map = mobilenet.output
         regression_head = tf.keras.Sequential([
+            tf.keras.layers.Flatten(),
             tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.ReLU(),
+            tf.keras.layers.Dense(512, use_bias=False),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(self.hp['dropout']),
             tf.keras.layers.ReLU(),
-            tf.keras.layers.Dense(2 * self.NUM_USED_FEATURE_POINTS),
-            tf.keras.layers.Lambda(
-                lambda x: tf.reshape(x, [-1, self.NUM_USED_FEATURE_POINTS, 2]),
-            )
+            tf.keras.layers.Dense(4),
+            tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=1))
+            #tf.keras.layers.Dense(2 * self.NUM_USED_FEATURE_POINTS),
+            #tf.keras.layers.Lambda(
+                #lambda x: tf.reshape(x, [-1, self.NUM_USED_FEATURE_POINTS, 2]),
+            #)
         ], name='feature_points')
+        regression_output = regression_head(feature_map)
         """classification_head = tf.keras.Sequential([
             tf.keras.layers.Dense(self.hp['classification_head_size'], activation='relu'),
             tf.keras.layers.Dropout(self.hp['dropout']),
             tf.keras.layers.Dense(1, activation='sigmoid')
         ], name='logos_facing')"""
-        regression_output = regression_head(feature_map)
         #classification_output = classification_head(model.output)
         # the two outputs will be the feature points vector and the sigmoid probability that the
         # logos are facing the camera
@@ -323,3 +353,7 @@ class FeaturePointsModel:
         #coords = tf.reshape(vector, [2, -1])
         indices = tf.concat([[1, 0], tf.range(2, tf.shape(vector)[-2])], axis=0)
         return tf.gather(vector, indices, axis=-2)
+
+    @staticmethod
+    def pose_loss(y_true, y_pred):
+        return 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1)))
