@@ -288,15 +288,15 @@ class FeaturePointsModel:
         feature_map = mobilenet.output
         regression_head = tf.keras.Sequential([
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False),
+            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(1e-4)),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.ReLU(),
-            tf.keras.layers.Dense(512, use_bias=False),
+            tf.keras.layers.Dense(512, use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(1e-4)),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(self.hp['dropout']),
             tf.keras.layers.ReLU(),
             tf.keras.layers.Dense(4),
-            tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=1))
+            tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))
             #tf.keras.layers.Dense(2 * self.NUM_USED_FEATURE_POINTS),
             #tf.keras.layers.Lambda(
                 #lambda x: tf.reshape(x, [-1, self.NUM_USED_FEATURE_POINTS, 2]),
@@ -358,49 +358,26 @@ class FeaturePointsModel:
 
     @staticmethod
     def pose_loss(y_true, y_pred):
-        e = FeaturePointsModel.to_euler(y_true)
-        flipped_true = FeaturePointsModel.to_quaternion(e)
+        flipped_true = FeaturePointsModel.flip_barrel(y_true)
 
         loss_a = 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1)))
         loss_b = 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(flipped_true, y_pred), axis=-1)))
         return tf.minimum(loss_a, loss_b)
 
     @staticmethod
-    def to_quaternion(e):
-        yaw = e[..., 0]
-        pitch = e[..., 1] + tf.constant(np.pi, dtype=tf.float32)
-        roll = e[..., 2]
-        cy = tf.cos(yaw * 0.5)
-        sy = tf.sin(yaw * 0.5)
-        cp = tf.cos(pitch * 0.5)
-        sp = tf.sin(pitch * 0.5)
-        cr = tf.cos(roll * 0.5)
-        sr = tf.sin(roll * 0.5)
-    
-        return tf.stack([
-            cy * cp * cr + sy * sp * sr,
-            cy * cp * sr - sy * sp * cr,
-            sy * cp * sr + cy * sp * cr,
-            sy * cp * cr - cy * sp * sr
-        ], axis=-1)
-
-    @staticmethod
-    def to_euler(q):
+    def flip_barrel(q):
+        """Rotates the barrel 180deg using quaternion magic"""
         w = q[..., 0]
         x = q[..., 1]
         y = q[..., 2]
         z = q[..., 3]
-        sinr_cosp = +2.0 * (w * x + y * z)
-        cosr_cosp = +1.0 - 2.0 * (x * x + y * y)
-        roll = tf.atan2(sinr_cosp, cosr_cosp)
-    
-        sinp = +2.0 * (w * y - z * x)
-        pitch = tf.asin(sinp)
-    
-        siny_cosp = +2.0 * (w * z + x * y)
-        cosy_cosp = +1.0 - 2.0 * (y * y + z * z)
-        yaw = tf.atan2(siny_cosp, cosy_cosp)
 
-        return tf.stack([yaw, pitch, roll], axis=-1)
+        vx = 2 * (y * w + x * z)
+        vy = 2 * (y * z - w * x)
+        vz = 1 - 2 * (x * x + y * y)
 
-    
+        wn = -(vx * x + vy * y + vz * z)
+        xn = vy * z - vz * y + w * vx
+        yn = vz * x - vx * z + w * vy
+        zn = vx * y - vy * x + w * vz
+        return tf.stack([wn, xn, yn, zn], axis=-1)
