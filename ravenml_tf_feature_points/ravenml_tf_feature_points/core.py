@@ -119,36 +119,28 @@ def eval(ctx, train, model_path):
     if train.artifact_path is None:
         ctx.fail("Must provide an artifact path for the visualizations to be saved to.")
 
-    model = tf.keras.models.load_model(model_path,
-                                       custom_objects={"average_distance_error": FeaturePointsModel.average_distance_error})
-    model.summary()
-
-    with open(train.dataset.path / 'feature_points.json', 'r') as f:
-        feature_points = json.load(f)
+    model = tf.keras.models.load_model(model_path)
+    model.compile(optimizer=tf.keras.optimizers.SGD(), loss=FeaturePointsModel.pose_loss)
 
     image_filenames = glob.glob(str(train.dataset.path / "test" / "image_*"))
     meta_filenames = glob.glob(str(train.dataset.path / "test" / "meta_*"))
     images = []
     truths = []
-    for image_filename, meta_filename in zip(sorted(image_filenames), sorted(meta_filenames)):
-        with open(meta_filename, "r") as f:
-            metadata = json.load(f)
-        centroid = metadata["truth_centroids"]["barrel_center"]
-        imsize = model.input_shape[1]
-        half_imsize = imsize // 2
-        image = cv2.imread(image_filename)
-        image = image[centroid[0] - half_imsize:centroid[0] + half_imsize, centroid[1] - half_imsize:centroid[1] + half_imsize]
-        image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
-        images.append(image)
 
-        truth = [metadata["truth_centroids"][f][0] - centroid[0] + half_imsize for f in feature_points]\
-            + [metadata["truth_centroids"][f][1] - centroid[1] + half_imsize for f in feature_points]
-        truths.append(truth)
+    def gen():
+        for image_filename, meta_filename in zip(sorted(image_filenames), sorted(meta_filenames)):
+            with open(meta_filename, "r") as f:
+                metadata = json.load(f)
+            centroid = metadata["truth_centroids"]["barrel_center"]
+            imsize = 224
+            half_imsize = imsize // 2
+            image = cv2.imread(image_filename)
+            image = image[centroid[0] - half_imsize:centroid[0] + half_imsize, centroid[1] - half_imsize:centroid[1] + half_imsize]
+            image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
+            yield image[None, ...], np.array(metadata["pose"])[None, ...]
 
-    images = np.array(images)
-    truths = np.array(truths)
-    predictions = model.predict(images)
-    for image, prediction in zip(images, predictions):
+    model.evaluate_generator(gen(), steps=len(image_filenames))
+    """for image, prediction in zip(images, predictions):
         image = (image * 127.5 + 127.5).astype(np.uint8)
         predicted_points = prediction.reshape(2, len(feature_points)).transpose()
         for point_name, point in zip(feature_points, predicted_points):
@@ -156,5 +148,5 @@ def eval(ctx, train, model_path):
             cv2.circle(image, coord, 5, (0, 0, 255), -1)
             cv2.putText(image, point_name, coord, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255))
         cv2.imshow('a', image)
-        cv2.waitKey(0)
+        cv2.waitKey(0)"""
 

@@ -135,15 +135,22 @@ class FeaturePointsModel:
                 image = (image + 1) / 2
 
                 # random multiple of 90 degree rotation
-                """k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
-                cosx = (1 - k % 2) * (-(k % 4) + 1)
-                sinx = (k % 2) * (-(k % 4 - 1) + 1)
-                rot_matrix = tf.convert_to_tensor([[cosx, -sinx], [sinx, cosx]], dtype=tf.float32)
-                center = (cropsize - 1) / 2
-                truth_points = tf.transpose(truth_points)
-                truth_points = tf.matmul(rot_matrix, truth_points - center) + center
-                truth_points = tf.transpose(truth_points)
-                image = tf.image.rot90(image, k)"""
+                k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
+                #cosx = (1 - k % 2) * (-(k % 4) + 1)
+                #sinx = (k % 2) * (-(k % 4 - 1) + 1)
+                #rot_matrix = tf.convert_to_tensor([[cosx, -sinx], [sinx, cosx]], dtype=tf.float32)
+                #center = (cropsize - 1) / 2
+                #truth_points = tf.transpose(truth_points)
+                #truth_points = tf.matmul(rot_matrix, truth_points - center) + center
+                #truth_points = tf.transpose(truth_points)
+                w = tf.cond(k == 0, lambda: 1, lambda: tf.cond(k == 1, lambda: np.sqrt(2), lambda: tf.cond(k == 2, lambda: 0, lambda: -np.sqrt(2))))
+                z = tf.cond(k == 0, lambda: 0, lambda: tf.cond(k == 2, lambda: 1, lambda: np.sqrt(2)))
+                wn = w * pose[0] - z * pose[3]
+                xn = w * pose[1] - z * pose[2]
+                yn = z * pose[1] + w * pose[2]
+                zn = w * pose[3] + z * pose[0]
+                pose = tf.stack([wn, xn, yn, zn], axis=-1)
+                image = tf.image.rot90(image, k)
 
                 image = tf.image.random_brightness(image, 0.2)
                 image = tf.image.random_saturation(image, 0.8, 1.2)
