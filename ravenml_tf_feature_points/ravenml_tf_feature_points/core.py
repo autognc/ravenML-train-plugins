@@ -1,3 +1,4 @@
+import traceback
 import click
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
@@ -8,6 +9,7 @@ import tensorflow as tf
 import numpy as np
 import cv2
 import os
+import sys
 import shutil
 
 from ravenml.utils.local_cache import LocalCache, global_cache
@@ -22,62 +24,35 @@ def tf_feature_points():
 HYP_TO_USE = [
     {
         'learning_rate': 4e-3,
-        'learning_rate_2': 1e-5,
-        'lr_decay_factor': 10,
+        'learning_rate_2': 4e-3,
         'dropout': 0.6,
-        'batch_size': 128,
+        'batch_size': 150,
         'optimizer': 'RMSProp',
-        'momentum': 0,
-        'nesterov_momentum': True,
-        'crop_size': 224,
-        'num_fine_tune_layers': 0,
-        'epochs': 100,
-        'regression_head_size': 1024,
-        'classification_head_size': 256
-     },
-    {
-        'learning_rate': 2e-3,
-        'lr_decay_factor': 20,
-        'dropout': 0.6,
-        'batch_size': 128,
-        'optimizer': 'RMSProp',
+        'optimizer_2': 'RMSProp',
         'momentum': 0,
         'nesterov_momentum': True,
         'crop_size': 224,
         'num_fine_tune_layers': 0,
         'epochs': 50,
-        'regression_head_size': 1024,
-        'classification_head_size': 256
-    },
-    {
+        'epochs_2': 50,
+        'regression_head_size': 1024
+     }]
+"""{
         'learning_rate': 2e-3,
-        'lr_decay_factor': 10,
+        'learning_rate_2': 1e-7,
         'dropout': 0.6,
-        'batch_size': 128,
-        'optimizer': 'SGD',
-        'momentum': 0.5,
+        'batch_size': 150,
+        'optimizer': 'RMSProp',
+        'optimizer_2': 'SGD',
+        'momentum': 0.1,
         'nesterov_momentum': True,
         'crop_size': 224,
         'num_fine_tune_layers': 0,
-        'epochs': 50,
-        'regression_head_size': 1024,
-        'classification_head_size': 256,
-    },
-    {
-        'learning_rate': 2e-3,
-        'lr_decay_factor': 20,
-        'dropout': 0.6,
-        'batch_size': 128,
-        'optimizer': 'SGD',
-        'momentum': 0.5,
-        'nesterov_momentum': True,
-        'crop_size': 224,
-        'num_fine_tune_layers': 0,
-        'epochs': 50,
-        'regression_head_size': 1024,
-        'classification_head_size': 256,
+        'epochs': 30,
+        'epochs_2': 30,
+        'regression_head_size': 1024
     }
-]
+]"""
 
 
 @tf_feature_points.command(help="Train a model.")
@@ -105,28 +80,31 @@ def train(ctx, train: TrainInput):
     mean = np.load(str(train.dataset.path / 'mean.npy'))
     stdev = np.load(str(train.dataset.path / 'stdev.npy'))
 
-    for i, hp in enumerate(HYP_TO_USE):
-        # fill metadata
-        metadata = {
-            'architecture': 'feature_points_regression',
-            'date_started_at': datetime.utcnow().isoformat() + "Z",
-            #'dataset_used': train.dataset.metadata,
-            'feature_points': feature_points
-        }
-        trainer = FeaturePointsModel(data_dir, feature_points, mean, stdev, hp)
-        metadata.update(trainer.hp)
-
-        with open(artifact_dir / f'model_{i}.json', 'w') as f:
-            json.dump(metadata, f, indent=2)
-
-        # run training
-        logdir = str(artifact_dir / f'logs_{i}')
-        if os.path.exists(logdir):
-            shutil.rmtree(logdir)
-        model = trainer.train(logdir=logdir)
-        model_path = artifact_dir / f'model_{i}.h5'
-        model.save(str(model_path.absolute()))
-
+    try:
+        for i, hp in enumerate(HYP_TO_USE):
+            # fill metadata
+            metadata = {
+                'architecture': 'feature_points_regression',
+                'date_started_at': datetime.utcnow().isoformat() + "Z",
+                #'dataset_used': train.dataset.metadata,
+                'feature_points': feature_points
+            }
+            trainer = FeaturePointsModel(data_dir, feature_points, mean, stdev, hp)
+            metadata.update(trainer.hp)
+    
+            with open(artifact_dir / f'model_{i}.json', 'w') as f:
+                json.dump(metadata, f, indent=2)
+    
+            # run training
+            logdir = str(artifact_dir / f'logs_{i}')
+            if os.path.exists(logdir):
+                shutil.rmtree(logdir)
+            model = trainer.train(logdir=logdir)
+            model_path = artifact_dir / f'model_{i}.h5'
+            model.save(str(model_path.absolute()))
+    except:
+        traceback.print_exc()
+        
     # return TrainOutput
     return None
     # return TrainOutput(metadata, artifact_dir, model_path, [], train.artifact_path is not None)

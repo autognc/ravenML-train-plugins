@@ -2,6 +2,7 @@ import tensorflow as tf
 import os
 import cv2
 import numpy as np
+import os
 
 
 class FeaturePointsModel:
@@ -9,13 +10,14 @@ class FeaturePointsModel:
         'learning_rate': 0.0045,
         'dropout': 0.5,
         'batch_size': 32,
-        'optimizer': 'SGD',
+        'optimizer': 'RMSProp',
+        'optimizer_2': 'SGD',
         'momentum': 0.9,
         'nesterov_momentum': True,
         'crop_size': 224,
         'num_fine_tune_layers': 0,
         'epochs': 10,
-        'shuffle_buffer': 4096,
+        'shuffle_buffer': 8192,
         'regression_head_size': 1024,
         'classification_head_size': 256
     }
@@ -166,13 +168,13 @@ class FeaturePointsModel:
             num_examples = int(f.read())
         filenames = tf.io.gfile.glob(os.path.join(self.data_dir, f"{split_name}.record-*"))
 
-        return tf.data.TFRecordDataset(filenames).map(_parse_function), num_examples
+        return tf.data.TFRecordDataset(filenames, num_parallel_reads=16).map(_parse_function, num_parallel_calls=16), num_examples
 
     def train(self, logdir=None):
         train_dataset, num_train = self._get_dataset('train', True)
         train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer']).batch(self.hp['batch_size']).repeat()
         val_dataset, num_val = self._get_dataset('test', False)
-        val_dataset = val_dataset.batch(self.hp['batch_size']).take(6).repeat()
+        val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
         """for imb, fb in train_dataset:
             for im, f in zip(imb, fb):
                 #im = (im.numpy() * self.stdev + self.mean) * 127.5 + 127.5
@@ -185,7 +187,7 @@ class FeaturePointsModel:
 
         callbacks = []
         if logdir:
-            callbacks.append(tf.keras.callbacks.TensorBoard(log_dir=logdir, write_graph=False, update_freq='batch', profile_batch=0, histogram_freq=5))
+            callbacks.append(tf.keras.callbacks.TensorBoard(log_dir=logdir, write_graph=False, profile_batch=0, histogram_freq=1))
         """callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(
             monitor='loss',
             factor=0.2,
@@ -224,25 +226,23 @@ class FeaturePointsModel:
                 #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
             ]#, ['accuracy']]
         )
-        try:
-            model.fit(
-                train_dataset,
-                epochs=50,#self.hp['epochs'],
-                #steps_per_epoch=-(-num_train // self.hp['batch_size']),
-                steps_per_epoch=20,
-                validation_data=val_dataset,
-                validation_steps=6,
-                #validation_steps=-(-num_val // self.hp['batch_size']),
-                callbacks=callbacks
-            )
-        except:
-            pass
+        model.fit(
+            train_dataset,
+            epochs=self.hp['epochs'],
+            steps_per_epoch=-(-num_train // self.hp['batch_size']),
+            #steps_per_epoch=20,
+            validation_data=val_dataset,
+            #validation_steps=8,
+            validation_steps=-(-num_val // self.hp['batch_size']),
+            callbacks=callbacks
+        )
 
         start_index = model.layers.index(model.get_layer('block_16_expand'))
         for layer in model.layers[start_index:]:
             layer.trainable = True
         #self.hp['learning_rate'] /= self.hp['lr_decay_factor']
         self.hp['learning_rate'] = self.hp['learning_rate_2']
+        self.hp['optimizer'] = self.hp['optimizer_2']
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](self.hp)
         #optimizer = self.OPTIMIZERS['SGD'](self.hp)
         model.compile(
@@ -262,12 +262,14 @@ class FeaturePointsModel:
             mode='min',
             min_delta=1
         )"""
+        if logdir:
+            callbacks[0] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(logdir, 'two'), write_graph=False, profile_batch=0, histogram_freq=1)
         model.fit(
             train_dataset,
-            epochs=50,#self.hp['epochs'],
-            steps_per_epoch=20,#-(-num_train // self.hp['batch_size']),
+            epochs=self.hp['epochs_2'],
+            steps_per_epoch=-(-num_train // self.hp['batch_size']),
             validation_data=val_dataset,
-            validation_steps=6,#-(-num_val // self.hp['batch_size']),
+            validation_steps=-(-num_val // self.hp['batch_size']),
             callbacks=callbacks
         )
         return model
@@ -356,4 +358,49 @@ class FeaturePointsModel:
 
     @staticmethod
     def pose_loss(y_true, y_pred):
-        return 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1)))
+        e = FeaturePointsModel.to_euler(y_true)
+        flipped_true = FeaturePointsModel.to_quaternion(e)
+
+        loss_a = 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1)))
+        loss_b = 2 * tf.acos(tf.abs(tf.reduce_sum(tf.multiply(flipped_true, y_pred), axis=-1)))
+        return tf.minimum(loss_a, loss_b)
+
+    @staticmethod
+    def to_quaternion(e):
+        yaw = e[..., 0]
+        pitch = e[..., 1] + tf.constant(np.pi, dtype=tf.float32)
+        roll = e[..., 2]
+        cy = tf.cos(yaw * 0.5)
+        sy = tf.sin(yaw * 0.5)
+        cp = tf.cos(pitch * 0.5)
+        sp = tf.sin(pitch * 0.5)
+        cr = tf.cos(roll * 0.5)
+        sr = tf.sin(roll * 0.5)
+    
+        return tf.stack([
+            cy * cp * cr + sy * sp * sr,
+            cy * cp * sr - sy * sp * cr,
+            sy * cp * sr + cy * sp * cr,
+            sy * cp * cr - cy * sp * sr
+        ], axis=-1)
+
+    @staticmethod
+    def to_euler(q):
+        w = q[..., 0]
+        x = q[..., 1]
+        y = q[..., 2]
+        z = q[..., 3]
+        sinr_cosp = +2.0 * (w * x + y * z)
+        cosr_cosp = +1.0 - 2.0 * (x * x + y * y)
+        roll = tf.atan2(sinr_cosp, cosr_cosp)
+    
+        sinp = +2.0 * (w * y - z * x)
+        pitch = tf.asin(sinp)
+    
+        siny_cosp = +2.0 * (w * z + x * y)
+        cosy_cosp = +1.0 - 2.0 * (y * y + z * z)
+        yaw = tf.atan2(siny_cosp, cosy_cosp)
+
+        return tf.stack([yaw, pitch, roll], axis=-1)
+
+    
