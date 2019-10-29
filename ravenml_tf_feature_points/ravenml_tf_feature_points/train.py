@@ -221,10 +221,10 @@ class FeaturePointsModel:
             optimizer=optimizer,
             loss=[self.pose_loss],#, binary_crossentropy_loss],
             loss_weights=[1],#, loss_ratio],
-            metrics=[
+            metrics=[self.pose_loss]
                 #[self.average_distance_error] +
                 #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
-            ]#, ['accuracy']]
+            #], ['accuracy']]
         )
         model.fit(
             train_dataset,
@@ -249,7 +249,7 @@ class FeaturePointsModel:
             optimizer=optimizer,
             loss=[self.pose_loss],#, binary_crossentropy_loss],
             loss_weights=[1],#, loss_ratio],
-            #metrics=[
+            metrics=[self.pose_loss]
                 #[self.average_distance_error] +
                 #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
             #], ['accuracy']]
@@ -288,10 +288,10 @@ class FeaturePointsModel:
         feature_map = mobilenet.output
         regression_head = tf.keras.Sequential([
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(1e-4)),
+            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.ReLU(),
-            tf.keras.layers.Dense(512, use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(1e-4)),
+            tf.keras.layers.Dense(512, use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(self.hp['dropout']),
             tf.keras.layers.ReLU(),

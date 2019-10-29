@@ -23,8 +23,9 @@ def tf_feature_points():
 
 HYP_TO_USE = [
     {
-        'learning_rate': 4e-3,
-        'learning_rate_2': 4e-3,
+        'learning_rate': 0.0045,
+        'learning_rate_2': 0.0045,
+        'l2_reg': 1e-4,
         'dropout': 0.6,
         'batch_size': 150,
         'optimizer': 'RMSProp',
