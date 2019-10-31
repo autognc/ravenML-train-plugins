@@ -25,35 +25,23 @@ HYP_TO_USE = [
     {
         'learning_rate': 0.0045,
         'learning_rate_2': 0.0045,
-        'l2_reg': 1e-4,
-        'dropout': 0.6,
+        'pooling': 'avg',
+        'fine_tune_start': 'block_16_expand',
+        'fine_tune_start_2': 'block_15_expand',
+        #'l2_reg': 0,
+        'dropout': 0.5,
         'batch_size': 150,
         'optimizer': 'RMSProp',
         'optimizer_2': 'RMSProp',
-        'momentum': 0,
-        'nesterov_momentum': True,
-        'crop_size': 224,
-        'num_fine_tune_layers': 0,
-        'epochs': 50,
-        'epochs_2': 50,
-        'regression_head_size': 1024
-     }]
-"""{
-        'learning_rate': 2e-3,
-        'learning_rate_2': 1e-7,
-        'dropout': 0.6,
-        'batch_size': 150,
-        'optimizer': 'RMSProp',
-        'optimizer_2': 'SGD',
-        'momentum': 0.1,
-        'nesterov_momentum': True,
+        #'momentum': 0,
+        #'nesterov_momentum': True,
         'crop_size': 224,
         'num_fine_tune_layers': 0,
         'epochs': 30,
-        'epochs_2': 30,
+        'epochs_2': 100,
         'regression_head_size': 1024
-    }
-]"""
+     }
+]
 
 
 @tf_feature_points.command(help="Train a model.")
@@ -98,13 +86,14 @@ def train(ctx, train: TrainInput):
     
             # run training
             logdir = str(artifact_dir / f'logs_{i}')
-            if os.path.exists(logdir):
-                shutil.rmtree(logdir)
+            #if os.path.exists(logdir):
+                #shutil.rmtree(logdir)
             model = trainer.train(logdir=logdir)
-            model_path = artifact_dir / f'model_{i}.h5'
-            model.save(str(model_path.absolute()))
+            #model_path = artifact_dir / f'model_{i}.h5'
+            #model.save(str(model_path.absolute()))
     except:
         traceback.print_exc()
+    #sys.exit(0)
         
     # return TrainOutput
     return None

@@ -2,7 +2,6 @@ import tensorflow as tf
 import os
 import cv2
 import numpy as np
-import os
 
 
 class FeaturePointsModel:
@@ -143,8 +142,18 @@ class FeaturePointsModel:
                 #truth_points = tf.transpose(truth_points)
                 #truth_points = tf.matmul(rot_matrix, truth_points - center) + center
                 #truth_points = tf.transpose(truth_points)
-                w = tf.cond(k == 0, lambda: 1, lambda: tf.cond(k == 1, lambda: np.sqrt(2), lambda: tf.cond(k == 2, lambda: 0, lambda: -np.sqrt(2))))
-                z = tf.cond(k == 0, lambda: 0, lambda: tf.cond(k == 2, lambda: 1, lambda: np.sqrt(2)))
+                #sqrt2 = tf.constant(float(np.sqrt(2)))
+                #zero = tf.constant(0.0)
+                #one = tf.constant(1.0)
+                #two = tf.constant(2.0)
+                #three = tf.constant(3.0)
+                #w = tf.case([(tf.equal(k, 0), lambda: 1.0), (tf.equal(k, 1), lambda: sqrt2), (tf.equal(k, 2), lambda: 0.0), (tf.equal(k, 3), lambda: -sqrt2)], exclusive=True)
+                #z = tf.case([(tf.equal(k, 0), lambda: 0.0), (tf.equal(k, 1), lambda: sqrt2), (tf.equal(k, 2), lambda: 1.0), (tf.equal(k, 3), lambda: sqrt2)], exclusive=True)
+                #w = tf.cond(tf.math.equal(k, 0), lambda: one, lambda: tf.cond(k == 1, lambda: sqrt2, lambda: tf.cond(k == 2, lambda: zero, lambda: -sqrt2)))
+                #z = tf.cond(tf.math.equal(k, 0), lambda: zero, lambda: tf.cond(k == 2, lambda: one, lambda: sqrt2))
+                half_angle = tf.cast(k, tf.float32) * (np.pi / 4)
+                w = tf.cos(half_angle)
+                z = tf.sin(half_angle)
                 wn = w * pose[0] - z * pose[3]
                 xn = w * pose[1] - z * pose[2]
                 yn = z * pose[1] + w * pose[2]
@@ -195,6 +204,12 @@ class FeaturePointsModel:
         callbacks = []
         if logdir:
             callbacks.append(tf.keras.callbacks.TensorBoard(log_dir=logdir, write_graph=False, profile_batch=0, histogram_freq=1))
+            callbacks.append(tf.keras.callbacks.ModelCheckpoint(
+                os.path.join(logdir, 'model.h5'),
+                monitor='val_pose_loss',
+                save_best_only=True,
+                mode='min'
+            ))
         """callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(
             monitor='loss',
             factor=0.2,
@@ -211,15 +226,7 @@ class FeaturePointsModel:
             mode='min',
             min_delta=1
         ))"""
-        """callbacks.append(tf.keras.callbacks.ModelCheckpoint(
-            'artifacts4/model.h5',
-            monitor='val_loss',
-            save_best_only=True,
-            mode='min'
-        ))"""
         model = self._get_model()
-        # model = tf.keras.models.load_model('artifacts4/model.h5', compile=False)
-        # model.trainable = True
         model.summary()
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](self.hp)
         # loss_ratio = (self.hp['crop_size']**2 - 1) / 12
@@ -243,15 +250,14 @@ class FeaturePointsModel:
             validation_steps=-(-num_val // self.hp['batch_size']),
             callbacks=callbacks
         )
-
-        start_index = model.layers.index(model.get_layer('block_16_expand'))
+        
+        model = tf.keras.models.load_model(os.path.join(logdir, 'model.h5'), compile=False)
+        start_index = model.layers.index(model.get_layer(self.hp['fine_tune_start']))
         for layer in model.layers[start_index:]:
             layer.trainable = True
-        #self.hp['learning_rate'] /= self.hp['lr_decay_factor']
         self.hp['learning_rate'] = self.hp['learning_rate_2']
         self.hp['optimizer'] = self.hp['optimizer_2']
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](self.hp)
-        #optimizer = self.OPTIMIZERS['SGD'](self.hp)
         model.compile(
             optimizer=optimizer,
             loss=[self.pose_loss],#, binary_crossentropy_loss],
@@ -262,15 +268,43 @@ class FeaturePointsModel:
             #], ['accuracy']]
         )
         model.summary()
-        """callbacks[-1] = tf.keras.callbacks.EarlyStopping(
-            monitor='val_loss',
-            patience=15,
-            verbose=1,
-            mode='min',
-            min_delta=1
-        )"""
-        if logdir:
-            callbacks[0] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(logdir, 'two'), write_graph=False, profile_batch=0, histogram_freq=1)
+        callbacks[0] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(logdir, 'two'), write_graph=False, profile_batch=0, histogram_freq=1)
+        callbacks[1] = tf.keras.callbacks.ModelCheckpoint(
+            os.path.join(logdir, 'two', 'model.h5'),
+            monitor='val_pose_loss',
+            save_best_only=True,
+            mode='min'
+        )
+        model.fit(
+            train_dataset,
+            epochs=self.hp['epochs_2'],
+            steps_per_epoch=-(-num_train // self.hp['batch_size']),
+            validation_data=val_dataset,
+            validation_steps=-(-num_val // self.hp['batch_size']),
+            callbacks=callbacks
+        )
+
+        model = tf.keras.models.load_model(os.path.join(logdir, 'two', 'model.h5'), compile=False)
+        start_index = model.layers.index(model.get_layer(self.hp['fine_tune_start_2']))
+        for layer in model.layers[start_index:]:
+            layer.trainable = True
+        model.compile(
+            optimizer=optimizer,
+            loss=[self.pose_loss],#, binary_crossentropy_loss],
+            loss_weights=[1],#, loss_ratio],
+            metrics=[self.pose_loss]
+                #[self.average_distance_error] +
+                #[self.get_point_average_distance_error(i, u) for i, u in enumerate(self.USED_FEATURE_POINTS)]
+            #], ['accuracy']]
+        )
+        model.summary()
+        callbacks[0] = tf.keras.callbacks.TensorBoard(log_dir=os.path.join(logdir, 'three'), write_graph=False, profile_batch=0, histogram_freq=1)
+        callbacks[1] = tf.keras.callbacks.ModelCheckpoint(
+            os.path.join(logdir, 'three', 'model.h5'),
+            monitor='val_pose_loss',
+            save_best_only=True,
+            mode='min'
+        )
         model.fit(
             train_dataset,
             epochs=self.hp['epochs_2'],
@@ -282,8 +316,10 @@ class FeaturePointsModel:
         return model
 
     def _get_model(self):
+        pooling = self.hp.get('pooling', None)
         mobilenet = tf.keras.applications.MobileNetV2(
             include_top=False,
+            pooling=pooling,
             weights='imagenet',
             input_shape=(self.hp['crop_size'], self.hp['crop_size'], 3)
         )
@@ -295,13 +331,14 @@ class FeaturePointsModel:
         feature_map = mobilenet.output
         regression_head = tf.keras.Sequential([
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
+            tf.keras.layers.Dense(self.hp['regression_head_size'], use_bias=False),# kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.ReLU(),
-            tf.keras.layers.Dense(512, use_bias=False, kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
-            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(self.hp['dropout']),
+            tf.keras.layers.Dense(512, use_bias=False),# kernel_regularizer=tf.keras.regularizers.l2(self.hp["l2_reg"])),
+            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.ReLU(),
+            tf.keras.layers.Dropout(self.hp['dropout']),
             tf.keras.layers.Dense(4),
             tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))
             #tf.keras.layers.Dense(2 * self.NUM_USED_FEATURE_POINTS),
