@@ -94,12 +94,6 @@ class FeaturePointsModel:
         def _parse_function(example):
             parsed = tf.io.parse_single_example(example, features)
             pose = parsed['pose']
-            image = tf.io.decode_image(parsed['image_data'], channels=3)
-            # fuck Tensorflow/Keras documentation. How does anything ever get done in the ML community?
-            # this apparently rescales inputs to the range [-1, 1], which SHOULD BE what the model expects
-            image = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(image, tf.float32))
-            imdims = tf.convert_to_tensor([parsed['height'], parsed['width']], dtype=tf.float32) - 1
-            # shape (num_features, 2) and in pixel coordinates
             feature_points = tf.transpose(tf.cast(parsed['feature_points'], tf.float32))
 
             # find an approximate bounding box to crop the image
@@ -112,25 +106,14 @@ class FeaturePointsModel:
             if train:
                 centroid += tf.random.uniform([2], minval=-bbox_size / 4, maxval=bbox_size / 4)
 
-            # transform feature points in the same way that the image will be cropped
+            # decode, preprocess to [-1, 1] range, and crop image
+            image = self.preprocess_image(parsed['image_data'], centroid, bbox_size, cropsize)
+            # transform feature points in the same way that the image was cropped
             truth_points = ((feature_points - centroid) / bbox_size + 1) / 2 * cropsize
-
-            # convert to [0, 1] relative coordinates
-            centroid /= imdims
-            bbox_size /= imdims  # will broadcast to shape [2]
-
-            # crop to (2 * barrel_length, 2 * barrel_length) centered around centroid and resize to (cropsize, cropsize)
-            image = tf.squeeze(tf.image.crop_and_resize(
-                tf.expand_dims(image, 0),
-                [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0], centroid[1] + bbox_size[1]]],
-                [0],
-                [cropsize, cropsize],
-                extrapolation_value=-1
-            ))
 
             # other augmentations
             if train:
-                # we have to convert the image values back into the [0, 1] format, because again, fuck Tensorflow/Keras
+                # we have to convert the image values back into the [0, 1] format
                 image = (image + 1) / 2
 
                 # random multiple of 90 degree rotation
@@ -177,7 +160,6 @@ class FeaturePointsModel:
             logos_visible = tf.expand_dims(tf.cast(theta < 0, tf.float32), 0)"""  # 1 if they're facing the camera, 0 otherwise
 
             #image = (image - self.mean) / self.stdev
-            image = tf.ensure_shape(image, [cropsize, cropsize, 3])
             return image, pose#(truth_points)#, logos_visible)
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
@@ -425,3 +407,27 @@ class FeaturePointsModel:
         yn = vz * x - vx * z + w * vy
         zn = vx * y - vy * x + w * vz
         return tf.stack([wn, xn, yn, zn], axis=-1)
+
+    @staticmethod
+    def preprocess_image(image_data, centroid, bbox_size, cropsize):
+        """Centroid and bbox_size in pixels"""
+        image = tf.io.decode_image(image_data, channels=3)
+        # this rescales inputs to the range [-1, 1], which should be what the model expects
+        image = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(image, tf.float32))
+        imdims = tf.cast(tf.shape(image)[:2] - 1, tf.float32)
+        # shape (num_features, 2) and in pixel coordinates
+
+        # convert to [0, 1] relative coordinates
+        centroid /= imdims
+        bbox_size /= imdims  # will broadcast to shape [2]
+
+        # crop to (2 * bbox_size, 2 * bbox_size) centered around centroid and resize to (cropsize, cropsize)
+        image = tf.squeeze(tf.image.crop_and_resize(
+            tf.expand_dims(image, 0),
+            [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0], centroid[1] + bbox_size[1]]],
+            [0],
+            [cropsize, cropsize],
+            extrapolation_value=-1
+        ))
+        image = tf.ensure_shape(image, [cropsize, cropsize, 3])
+        return image

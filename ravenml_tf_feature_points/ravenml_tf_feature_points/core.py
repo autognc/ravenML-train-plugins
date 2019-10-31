@@ -10,6 +10,7 @@ import numpy as np
 import cv2
 import os
 import sys
+import time
 import shutil
 
 from ravenml.utils.local_cache import LocalCache, global_cache
@@ -100,7 +101,36 @@ def train(ctx, train: TrainInput):
     # return TrainOutput(metadata, artifact_dir, model_path, [], train.artifact_path is not None)
 
 
-@tf_feature_points.command(help="Visualize a model.")
+def get_directory_dataset(dir_path, cropsize):
+    def decode_json(filename):
+        filename = filename.numpy()
+        with open(filename, "r") as f:
+            metadata = json.load(f)
+        return [
+            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_center"], dtype=tf.float32),
+            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_top"], dtype=tf.float32),
+            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_bottom"], dtype=tf.float32),
+            tf.convert_to_tensor(metadata["truth_centroids"]["panel_left"], dtype=tf.float32),
+            tf.convert_to_tensor(metadata["truth_centroids"]["panel_right"], dtype=tf.float32),
+            tf.convert_to_tensor(metadata["pose"], dtype=tf.float32)
+        ]
+
+    def parse_fn(image_filename, meta_filename):
+        image_data = tf.io.read_file(image_filename)
+        [centroid, top, bottom, left, right, pose] = tf.py_function(decode_json, [meta_filename], [tf.float32] * 6)
+        barrel_length = tf.norm(top - bottom)
+        panel_sep = tf.norm(left - right)
+        bbox_size = tf.maximum(barrel_length, panel_sep)
+        image = FeaturePointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
+        pose = tf.ensure_shape(pose, [4])
+        return image, pose
+
+    image_files = tf.data.Dataset.list_files(os.path.join(dir_path, "image_*"), shuffle=False)
+    meta_files = tf.data.Dataset.list_files(os.path.join(dir_path, "meta_*"), shuffle=False)
+    return tf.data.Dataset.zip((image_files, meta_files)).map(parse_fn, num_parallel_calls=4)
+
+
+@tf_feature_points.command(help="Evaluate a model (keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
 @pass_train
 @click.pass_context
@@ -108,34 +138,97 @@ def eval(ctx, train, model_path):
     if train.artifact_path is None:
         ctx.fail("Must provide an artifact path for the visualizations to be saved to.")
 
-    model = tf.keras.models.load_model(model_path)
-    model.compile(optimizer=tf.keras.optimizers.SGD(), loss=FeaturePointsModel.pose_loss)
+    model = tf.keras.models.load_model(model_path, compile=False)
+    model.compile(loss=FeaturePointsModel.pose_loss)
 
-    image_filenames = glob.glob(str(train.dataset.path / "test" / "image_*"))
-    meta_filenames = glob.glob(str(train.dataset.path / "test" / "meta_*"))
-    images = []
-    truths = []
 
-    def gen():
-        for image_filename, meta_filename in zip(sorted(image_filenames), sorted(meta_filenames)):
-            with open(meta_filename, "r") as f:
-                metadata = json.load(f)
-            centroid = metadata["truth_centroids"]["barrel_center"]
-            imsize = 224
-            half_imsize = imsize // 2
-            image = cv2.imread(image_filename)
-            image = image[centroid[0] - half_imsize:centroid[0] + half_imsize, centroid[1] - half_imsize:centroid[1] + half_imsize]
-            image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
-            yield image[None, ...], np.array(metadata["pose"])[None, ...]
-
-    model.evaluate_generator(gen(), steps=len(image_filenames))
-    """for image, prediction in zip(images, predictions):
-        image = (image * 127.5 + 127.5).astype(np.uint8)
-        predicted_points = prediction.reshape(2, len(feature_points)).transpose()
-        for point_name, point in zip(feature_points, predicted_points):
-            coord = tuple(point[::-1])
-            cv2.circle(image, coord, 5, (0, 0, 255), -1)
-            cv2.putText(image, point_name, coord, cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255))
-        cv2.imshow('a', image)
+    """for image, pose in test_data:
+        print(image)
+        print(pose)
+        im = (image.numpy() * 127.5 + 127.5).astype(np.uint8)
+        cv2.imshow('a', im)
         cv2.waitKey(0)"""
+    test_data = get_directory_dataset(train.dataset.path / "test", model.input.shape[1]).batch(32)
+    model.evaluate(test_data)
 
+
+@tf_feature_points.command(help="Freeze a model to Tensorflow format so that it can be served from anywhere.")
+@click.argument('model_path', type=click.Path(exists=True))
+@click.argument('output_path', type=click.Path())
+def freeze(model_path, output_path):
+    model = tf.keras.models.load_model(model_path, compile=False)
+
+    # for some reason, directly trying to save the keras model isn't working,
+    # so let's create a custom one as a workaround. This conveniently also
+    # allows us to build in the preprocessing and get rid of the batch dimension
+    class Module(tf.Module):
+        def __init__(self, model):
+            # directly copy over the variables to get rid of keras weirdness
+            for layer in model.layers:
+                for variable in layer.variables:
+                    setattr(self, variable.name, variable)
+
+        @tf.function(input_signature=[tf.TensorSpec(model.input.shape[1:], dtype=np.uint8)])
+        def __call__(self, image):
+            batch_im = tf.expand_dims(image, 0)
+            normalized = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(batch_im, tf.float32))
+            return tf.squeeze(model(normalized))
+
+    module = Module(model)
+    # call it once to create a trace
+    #module(tf.convert_to_tensor(np.zeros(model.input.shape[1:], dtype=np.uint8)))
+    # save
+    tf.saved_model.save(module, output_path)
+
+
+@tf_feature_points.command(help="Evaluate a model (TF format) on a directory of images.")
+@click.argument('model_path', type=click.Path(exists=True))
+@click.argument('directory', type=click.Path(exists=True))
+@click.option('--num', '-n', type=int, default=-1)
+def process_directory(model_path, directory, num):
+    tf.compat.v1.disable_eager_execution()
+    model = tf.compat.v2.saved_model.load(model_path)
+    cropsize = model.__call__.concrete_functions[0].inputs[0].shape[1]
+    data = get_directory_dataset(directory, cropsize).take(num)
+    iterator = tf.compat.v1.data.make_one_shot_iterator(data)
+
+    image_op, truth_pose_op = iterator.get_next()
+    image_op = tf.cast(image_op * 127.5 + 127.5, tf.uint8)
+
+    image_placeholder = tf.compat.v1.placeholder(shape=[cropsize, cropsize, 3], dtype=tf.uint8)
+    pose_op = model(image_placeholder)
+
+    detected_pose_placeholder = tf.compat.v1.placeholder(shape=[4], dtype=tf.float32)
+    pose_loss_op = FeaturePointsModel.pose_loss(truth_pose_op, detected_pose_placeholder)
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        try:
+            i = 0
+            results = []
+            while True:
+                print("Image ", i)
+                image = sess.run(image_op)
+                start_time = time.time()
+                detected_pose = sess.run(pose_op, feed_dict={image_placeholder: image})
+                time_elapsed = time.time() - start_time
+                print("Time: ", int(time_elapsed * 1000), "ms")
+                truth_pose, pose_loss = sess.run([truth_pose_op, pose_loss_op], feed_dict={detected_pose_placeholder: detected_pose})
+
+                result = {
+                    'truth_pose': truth_pose.tolist(),
+                    'detected_pose': detected_pose.tolist(),
+                    'pose_error': float(pose_loss),
+                    'time': time_elapsed,
+                    'num': i
+                }
+                results.append(result)
+                i += 1
+        except tf.errors.OutOfRangeError:
+            pass
+
+    avg_time = sum(result['time'] for result in results) / len(results)
+    avg_error = sum(result['pose_error'] for result in results) / len(results)
+    print(f"Average time: {int(avg_time * 1000)}ms, average error: {avg_error}")
+    with open('results.json', 'w') as f:
+        json.dump(results, f, indent=2)
