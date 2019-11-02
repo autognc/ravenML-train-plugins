@@ -4,17 +4,23 @@ from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from datetime import datetime
 import json
-import glob
 import tensorflow as tf
 import numpy as np
-import cv2
 import os
+import glob
 import sys
 import time
 import shutil
+import cv2
 
 from ravenml.utils.local_cache import LocalCache, global_cache
 from .train import FeaturePointsModel
+
+
+def recursive_map_dict(d, f):
+    if isinstance(d, dict):
+        return {k: recursive_map_dict(v, f) for k, v in d.items()}
+    return f(d)
 
 
 @click.group(help='TensorFlow Feature Point Regression.')
@@ -102,32 +108,30 @@ def train(ctx, train: TrainInput):
 
 
 def get_directory_dataset(dir_path, cropsize):
-    def decode_json(filename):
-        filename = filename.numpy()
-        with open(filename, "r") as f:
-            metadata = json.load(f)
-        return [
-            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_center"], dtype=tf.float32),
-            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_top"], dtype=tf.float32),
-            tf.convert_to_tensor(metadata["truth_centroids"]["barrel_bottom"], dtype=tf.float32),
-            tf.convert_to_tensor(metadata["truth_centroids"]["panel_left"], dtype=tf.float32),
-            tf.convert_to_tensor(metadata["truth_centroids"]["panel_right"], dtype=tf.float32),
-            tf.convert_to_tensor(metadata["pose"], dtype=tf.float32)
-        ]
+    def generator():
+        image_files = sorted(glob.glob(os.path.join(dir_path, "image_*")))
+        meta_files = sorted(glob.glob(os.path.join(dir_path, "meta_*")))
+        for image_file, meta_file in zip(image_files, meta_files):
+            image_data = tf.io.read_file(image_file)
+            with open(meta_file, "r") as f:
+                metadata = json.load(f)
+            metadata = recursive_map_dict(metadata, tf.convert_to_tensor)
+            centroid = tf.cast(metadata["truth_centroids"]["barrel_center"], tf.float32)
+            top = tf.cast(metadata["truth_centroids"]["barrel_top"], tf.float32)
+            bottom = tf.cast(metadata["truth_centroids"]["barrel_bottom"], tf.float32)
+            left = tf.cast(metadata["truth_centroids"]["panel_left"], tf.float32)
+            right = tf.cast(metadata["truth_centroids"]["panel_right"], tf.float32)
+            barrel_length = tf.norm(top - bottom)
+            panel_sep = tf.norm(left - right)
+            bbox_size = tf.maximum(barrel_length, panel_sep)
+            image = FeaturePointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
+            yield image, metadata
 
-    def parse_fn(image_filename, meta_filename):
-        image_data = tf.io.read_file(image_filename)
-        [centroid, top, bottom, left, right, pose] = tf.py_function(decode_json, [meta_filename], [tf.float32] * 6)
-        barrel_length = tf.norm(top - bottom)
-        panel_sep = tf.norm(left - right)
-        bbox_size = tf.maximum(barrel_length, panel_sep)
-        image = FeaturePointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
-        pose = tf.ensure_shape(pose, [4])
-        return image, pose
-
-    image_files = tf.data.Dataset.list_files(os.path.join(dir_path, "image_*"), shuffle=False)
-    meta_files = tf.data.Dataset.list_files(os.path.join(dir_path, "meta_*"), shuffle=False)
-    return tf.data.Dataset.zip((image_files, meta_files)).map(parse_fn, num_parallel_calls=4)
+    meta_file_0 = glob.glob(os.path.join(dir_path, "meta*"))[0]
+    with open(meta_file_0, "r") as f:
+        meta0 = json.load(f)
+    dtypes = recursive_map_dict(meta0, lambda x: tf.convert_to_tensor(x).dtype)
+    return tf.data.Dataset.from_generator(generator, (tf.float32, dtypes))
 
 
 @tf_feature_points.command(help="Evaluate a model (keras .h5 format).")
@@ -135,20 +139,23 @@ def get_directory_dataset(dir_path, cropsize):
 @pass_train
 @click.pass_context
 def eval(ctx, train, model_path):
-    if train.artifact_path is None:
-        ctx.fail("Must provide an artifact path for the visualizations to be saved to.")
-
     model = tf.keras.models.load_model(model_path, compile=False)
     model.compile(loss=FeaturePointsModel.pose_loss)
 
-
+    cropsize = model.input.shape[1]
+    test_data = get_directory_dataset(train.dataset.path / "test", cropsize)
+    test_data = test_data.map(
+        lambda image, metadata: (
+            tf.ensure_shape(image, [cropsize, cropsize, 3]),
+            tf.ensure_shape(metadata["pose"], [4])
+        )
+    )
+    test_data = test_data.batch(32)
     """for image, pose in test_data:
-        print(image)
         print(pose)
         im = (image.numpy() * 127.5 + 127.5).astype(np.uint8)
         cv2.imshow('a', im)
         cv2.waitKey(0)"""
-    test_data = get_directory_dataset(train.dataset.path / "test", model.input.shape[1]).batch(32)
     model.evaluate(test_data)
 
 
@@ -186,46 +193,30 @@ def freeze(model_path, output_path):
 @click.argument('directory', type=click.Path(exists=True))
 @click.option('--num', '-n', type=int, default=-1)
 def process_directory(model_path, directory, num):
-    tf.compat.v1.disable_eager_execution()
     model = tf.compat.v2.saved_model.load(model_path)
     cropsize = model.__call__.concrete_functions[0].inputs[0].shape[1]
     data = get_directory_dataset(directory, cropsize).take(num)
-    iterator = tf.compat.v1.data.make_one_shot_iterator(data)
 
-    image_op, truth_pose_op = iterator.get_next()
-    image_op = tf.cast(image_op * 127.5 + 127.5, tf.uint8)
+    def make_serializable(tensor):
+        n = tensor.numpy()
+        if isinstance(n, bytes):
+            return n.decode('utf-8')
+        return n.tolist()
 
-    image_placeholder = tf.compat.v1.placeholder(shape=[cropsize, cropsize, 3], dtype=tf.uint8)
-    pose_op = model(image_placeholder)
-
-    detected_pose_placeholder = tf.compat.v1.placeholder(shape=[4], dtype=tf.float32)
-    pose_loss_op = FeaturePointsModel.pose_loss(truth_pose_op, detected_pose_placeholder)
-
-    with tf.compat.v1.Session() as sess:
-        sess.run(tf.compat.v1.global_variables_initializer())
-        try:
-            i = 0
-            results = []
-            while True:
-                print("Image ", i)
-                image = sess.run(image_op)
-                start_time = time.time()
-                detected_pose = sess.run(pose_op, feed_dict={image_placeholder: image})
-                time_elapsed = time.time() - start_time
-                print("Time: ", int(time_elapsed * 1000), "ms")
-                truth_pose, pose_loss = sess.run([truth_pose_op, pose_loss_op], feed_dict={detected_pose_placeholder: detected_pose})
-
-                result = {
-                    'truth_pose': truth_pose.tolist(),
-                    'detected_pose': detected_pose.tolist(),
-                    'pose_error': float(pose_loss),
-                    'time': time_elapsed,
-                    'num': i
-                }
-                results.append(result)
-                i += 1
-        except tf.errors.OutOfRangeError:
-            pass
+    results = []
+    for i, (image, metadata) in enumerate(data):
+        image = tf.cast(image * 127.5 + 127.5, tf.uint8)
+        start_time = time.time()
+        detected_pose = model(image)
+        time_elapsed = time.time() - start_time
+        print("Image: ", i, "Time: ", int(time_elapsed * 1000), "ms")
+        result = recursive_map_dict(metadata, make_serializable)
+        result.update({
+            'detected_pose': make_serializable(detected_pose),
+            'time': time_elapsed,
+            'pose_error': make_serializable(FeaturePointsModel.pose_loss(metadata['pose'], detected_pose))
+        })
+        results.append(result)
 
     avg_time = sum(result['time'] for result in results) / len(results)
     avg_error = sum(result['pose_error'] for result in results) / len(results)
