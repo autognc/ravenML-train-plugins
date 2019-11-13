@@ -26,6 +26,8 @@ from ravenml.utils.question import cli_spinner, Spinner, user_selects
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
 
+from comet_ml import Experiment
+
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
@@ -90,6 +92,16 @@ def train(ctx, train: TrainInput, verbose: bool):
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
+
+    experiment = None
+    if not no_comet:
+        experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
+        name = user_input('What would you like to name the comet experiment?:')
+        experiment.set_name(name)
+        experiment.log_parameters(metadata['hyperparameters'])
+        experiment.set_git_metadata()
+        experiment.set_os_packages()
+        experiment.set_pip_packages()
     
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
