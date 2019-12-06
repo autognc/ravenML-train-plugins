@@ -10,7 +10,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-import click
+import click 
 import io
 import sys
 import yaml
@@ -22,9 +22,11 @@ from ravenml.options import verbose_opt
 from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
-from ravenml.utils.question import cli_spinner, Spinner, user_selects 
+from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input 
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
+import ravenml_tf_bbox.validation.utils as utils
+from google.protobuf import text_format
 
 from comet_ml import Experiment
 
@@ -34,6 +36,10 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
 # put any custom Click options you create here
+comet_opt = click.option(
+    '-c', '--comet', is_flag=True,
+    help='Disable comet on this training run.'
+)
 
 
 ### COMMANDS ###
@@ -44,10 +50,11 @@ def tf_bbox(ctx):
     
 @tf_bbox.command(help='Train a model.')
 @verbose_opt
+@comet_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool):
+def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -94,7 +101,7 @@ def train(ctx, train: TrainInput, verbose: bool):
         ctx.exit('Training cancelled.')
 
     experiment = None
-    if not no_comet:
+    if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
         name = user_input('What would you like to name the comet experiment?:')
         experiment.set_name(name)
@@ -150,17 +157,28 @@ def train(ctx, train: TrainInput, verbose: bool):
     model_path = model_path / os.listdir(model_path)[0] / 'saved_model.pb'        
     
     # get extra config files
-    extra_files = _get_checkpoints_and_config_paths(base_dir)
+    extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
+    model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
+
+    try:
+        print("time for validation")
+
+        graph = utils.get_default_graph(str(model_path))
+        print("loaded model graph")
+    except Exception as e:
+        raise e
+        print("Exception:", e)
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
     
 
 ### HELPERS ###
-def _get_checkpoints_and_config_paths(artifact_path: Path):
+def _get_paths_for_extra_files(artifact_path: Path):
     """Returns the filepaths for all checkpoint, config, and pbtxt (label)
-    files in the artifact directory.
+    files in the artifact directory. Gets filepath for the exported inference
+    graph.
 
     Args:
         artifact_path (Path): path to training artifacts
@@ -172,11 +190,75 @@ def _get_checkpoints_and_config_paths(artifact_path: Path):
     # get checkpoints
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
-    extras = [extras_path / f for f in files if checkpoint_regex.match(f)]
-    # append other files
-    extras.append(extras_path / 'pipeline.config')
+
+    # path to saved_model.pb
+    saved_model_path = extras_path / 'export' / 'exported_model'
+    saved_model_path = saved_model_path / os.listdir(saved_model_path)[0] / 'saved_model.pb'
+
+    # path to label map
+    labels_path = artifact_path / 'data' / 'label_map.pbtxt'
+
+    checkpoints = [f for f in files if checkpoint_regex.match(f)]
+
+    # calculate the max checkpoint
+    max_checkpoint = 0
+    for checkpoint in checkpoints:
+        checkpoint_num = int(checkpoint.split('-')[1].split('.')[0])
+        if checkpoint_num > max_checkpoint:
+            max_checkpoint = checkpoint_num
+
+    ckpt_prefix = 'model.ckpt-' + str(max_checkpoint)
+    checkpoint_path = extras_path / ckpt_prefix
+    pipeline_path = extras_path / 'pipeline.config'
+    exported_dir = artifact_path / 'frozen_model'
+
+    # export frozen inference graph
+    _export_frozen_inference_graph(str(pipeline_path), str(checkpoint_path), str(exported_dir))
+
+    # append files to include in extras directory
+    extras = [extras_path / f for f in checkpoints]
+    extras.append(pipeline_path)
     extras.append(extras_path / 'graph.pbtxt')
-    return extras
+    extras.append(saved_model_path)
+
+    # path to exported frozen inference model
+    frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
+
+    # append event checkpoints for tensorboard
+    for f in os.listdir(extras_path):
+        if f.startswith('events.out'):
+            extras.append(extras_path / f)
+
+    for f in os.listdir(extras_path / 'eval_0'):
+        if f.startswith('events.out'):
+            extras.append(extras_path / 'eval_0' / f)
+
+    extras.append(labels_path)
+    return extras, frozen_graph_path
+
+
+def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
+    """Exports frozen inference graph from model checkpoints
+
+    Args: 
+        pipeline_config_path (str): path to pipeline config file
+        checkpoint_path (str): path to checkpoint prefix with highest steps
+            e.g. the checkpoint_path for /model/model.ckpt-100.index is 
+            /model/model.ckpt-100
+        output_directory (str): directory where the frozen_inference_graph will
+            be outputted to
+    """
+    
+    pipeline_config = pipeline_pb2.TrainEvalPipelineConfig()
+    with tf.gfile.GFile(pipeline_config_path, 'r') as f:
+        text_format.Merge(f.read(), pipeline_config)
+    text_format.Merge('', pipeline_config)
+    
+    input_shape = None
+    exporter.export_inference_graph(
+        'image_tensor', pipeline_config, checkpoint_path,
+        output_directory, input_shape=input_shape,
+        write_inference_graph=False)
 
 # stdout redirection found at https://codingdose.info/2018/03/22/supress-print-output-in-python/
 def _import_od():
@@ -200,6 +282,8 @@ def _import_od():
     _dynamic_import('tensorflow', 'tf')
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
     _dynamic_import('object_detection.model_lib', 'model_lib')
+    _dynamic_import('object_detection.exporter', 'exporter')
+    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
