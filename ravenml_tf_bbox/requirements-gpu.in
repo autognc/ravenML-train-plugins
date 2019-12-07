@@ -1,4 +1,4 @@
-tensorflow-gpu<2.0c
+tensorflow-gpu<2.0
 absl-py
 pycocotools
 matplotlib
