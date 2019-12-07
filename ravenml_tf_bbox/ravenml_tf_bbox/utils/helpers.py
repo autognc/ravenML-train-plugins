@@ -108,6 +108,25 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
             pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + r"\\")
         else:
             pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + '/')
+
+    # place TF record files into training directory
+    num_train_records = 0
+    num_test_records = 0
+    records_path = data_path / 'splits/standard/train'
+    for record_file in os.listdir(records_path):
+        if record_file.startswith('train.record-'):
+            num_train_records += 1
+            file_path = records_path / record_file
+            shutil.copy(file_path, base_dir / 'data')
+
+        if record_file.startswith('test.record-'):
+            num_test_records += 1
+            file_path = records_path / record_file
+            shutil.copy(file_path, base_dir / 'data')
+
+    # convert int to left zero padded string of length 5
+    user_config['num_train_records'] = str(num_train_records).zfill(5)
+    user_config['num_test_records'] = str(num_test_records).zfill(5)
             
     # insert rest of config into config file
     for key, value in user_config.items():
@@ -120,13 +139,6 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
         file.write(pipeline_contents)
-    
-    # place TF record files into training directory
-    # TODO: change to move all sharded chunks
-    train_record = data_path / 'splits/standard/train/train.record-00000-of-00001'
-    test_record = data_path / 'splits/standard/train/test.record-00000-of-00001'
-    shutil.copy(train_record, base_dir / 'data')
-    shutil.copy(test_record, base_dir / 'data')
 
     # copy model checkpoints to our train folder
     checkpoint_folder = arch_path
