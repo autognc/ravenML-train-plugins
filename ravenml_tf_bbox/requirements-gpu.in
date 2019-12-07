@@ -8,3 +8,4 @@ lxml
 jupyter
 numpy
 cython
+awscli==1.16.181
