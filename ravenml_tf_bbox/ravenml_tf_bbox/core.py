@@ -26,6 +26,7 @@ from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_inpu
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
 import ravenml_tf_bbox.validation.utils as utils
+import ravenml_tf_bbox.validation.stats as stats
 from google.protobuf import text_format
 
 from comet_ml import Experiment
@@ -164,10 +165,43 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     try:
         print("time for validation")
 
+        # path to label_map.pbtxt
+        label_path = extra_files[-1]
+        dev_path = train.dataset.path / 'splits/standard/dev'
+        output_path = base_dir / 'validation'
+
+
+        category_index = utils.get_categories(str(label_path))
+        print("loaded label map")
+
+        image_paths, bbox_paths, metadata_paths = utils.get_image_paths(dev_path)
+        print("loaded image paths")
+
+        images = utils.gen_images_from_paths(image_paths)
+        print("loaded images into array")
+
+        all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
+        print("loaded truths into array")
+
         graph = utils.get_default_graph(str(model_path))
         print("loaded model graph")
+
+        #print("running inference for {} images..".format(str(len(images))))
+        outputs, times = utils.run_inference_for_multiple_images(images, graph)
+        print("inference done")
+
+        all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
+        print("converted inference outputs to detected objects")
+
+        confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
+        print('calculated model performance')
+
+        stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
+        print('wrote model performance to json file')
+
+        extra_files.append(output_path / 'stats.json')
+
     except Exception as e:
-        raise e
         print("Exception:", e)
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
