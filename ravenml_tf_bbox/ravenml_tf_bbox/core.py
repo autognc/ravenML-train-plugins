@@ -203,6 +203,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
     except Exception as e:
         print("Exception:", e)
+        metadata['validation_error'] = e
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
