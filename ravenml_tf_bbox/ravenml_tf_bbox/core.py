@@ -201,6 +201,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
         extra_files.append(output_path / 'stats.json')
 
+        if comet:
+            experiment.log_asset(output_path / 'stats.json')
+
     except Exception as e:
         print("Exception:", e)
         metadata['validation_error'] = e
