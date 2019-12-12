@@ -61,6 +61,16 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     with open(pbtxt_file, "r") as f:
         ids = [line for line in f if "id:" in line]
         num_classes = len(ids)
+    
+    # get num eval examples from file
+    num_eval_file = data_path / 'splits/standard/train/test.record.numexamples'
+    try:
+        with open(num_eval_file, "r") as f:
+            lines = f.readlines()
+            num_eval_examples = int(lines[0])
+
+    except:
+        num_eval_examples = 1
 
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
@@ -135,6 +145,9 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
 
     # insert num clases into config file
     pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
+
+    # insert num eval examples into config file
+    pipeline_contents = pipeline_contents.replace('<replace_num_eval_examples>', str(num_eval_examples))
 
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:

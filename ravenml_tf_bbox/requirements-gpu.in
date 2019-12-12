@@ -4,7 +4,7 @@ matplotlib
 contextlib2
 pillow
 lxml
-jupyter
 numpy
 cython
 awscli==1.16.181
+comet-ml==3.0.1
