@@ -1,0 +1,14 @@
+Momentum:
+  train_steps: 80000
+  l2_regularizer_weight: 0.0
+  batch_size: 1
+  max_detections_per_class: 100
+  max_proposals: 50
+  use_dropout: true
+  dropout_keep_probability: 0.5
+  min_dimension: 603
+  max_dimension: 1072
+  anchor_size: 72
+  anchor_scales: "[0.25, 0.5, 1.0, 2.0]"
+  anchor_aspect_ratios: "[0.3333, 0.25, 0.5, 1.0, 2.0, 3.0]"
+  anchor_stride: 16
