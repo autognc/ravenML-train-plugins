@@ -124,6 +124,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     config = tf.estimator.RunConfig(model_dir=model_dir)
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
         run_config=config,
+        sample_1_of_n_eval_examples=1,
         hparams=model_hparams.create_hparams(None),
         pipeline_config_path=pipeline_config_path,
         train_steps=num_train_steps)
