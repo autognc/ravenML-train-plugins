@@ -15,10 +15,10 @@ Momentum:
 
 RMSProp:
   train_steps: 60000
-  initial_learning_rate: 0.0004
-  decay_factor: 0.5
+  initial_learning_rate: 0.0001
+  decay_factor: 0.2
   decay_steps: 20000
-  l2_regularizer_weight: 0.0
+  l2_regularizer_weight: 0.00004
   batch_size: 4
   max_detections_per_class: 100
   max_proposals: 50
@@ -30,3 +30,7 @@ RMSProp:
   anchor_scales: "[0.25, 0.5, 1.0, 2.0]"
   anchor_aspect_ratios: "[0.3333, 0.25, 0.5, 1.0, 2.0, 3.0]"
   anchor_stride: 16
+  patch_gaussian_min_patch_size: 200
+  patch_gaussian_max_patch_size: 201
+  patch_gaussian_max_stddev: 1.0
+
