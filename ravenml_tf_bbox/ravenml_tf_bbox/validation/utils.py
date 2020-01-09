@@ -135,20 +135,13 @@ def run_inference_for_multiple_images(images, graph):
                 tensor_name = key + ':0'
                 if tensor_name in all_tensor_names:
                     tensor_dict[key] = tf.get_default_graph().get_tensor_by_name(tensor_name)
-            ostart = time.time()
-            if tensor_dict.get('detection_boxes') is not None:
-                detection_boxes = tf.squeeze(tensor_dict['detection_boxes'], [0])
-                # Reframe is required to translate mask from box coordinates to image coordinates and fit the image size.
-                real_num_detection = tf.cast(tensor_dict['num_detections'][0], tf.int32)
-                detection_boxes = tf.slice(detection_boxes, [0, 0], [real_num_detection, -1])
             image_tensor = tf.get_default_graph().get_tensor_by_name('image_tensor:0')
-            count = 1
-            for image in images:
+            for i, image in enumerate(images):
                 # Run inference
                 start = time.time()
                 output_dict = sess.run(tensor_dict, feed_dict={image_tensor: np.expand_dims(image, 0)})
                 end = time.time()
-                #print('inference time : {}'.format(end - start))
+                print(f'Image {i}, inference time : {end - start}')
  
                 # all outputs are float32 numpy arrays, so convert types as appropriate
                 output_dict['num_detections'] = int(output_dict['num_detections'][0])
@@ -158,12 +151,6 @@ def run_inference_for_multiple_images(images, graph):
  
                 output_dict_array.append(output_dict)
                 dict_time.append(end - start)
-
-                if count % 25 == 0:
-                    print("{} images done".format(str(count)))
-
-                count += 1
-
 
     return output_dict_array, dict_time
 

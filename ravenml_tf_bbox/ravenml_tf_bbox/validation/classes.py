@@ -1,10 +1,11 @@
-class DetectedClass():
+class DetectedClass:
     def __init__(self, class_name, score, box):
         self.class_name = class_name
         self.score = score
         self.box = box
 
-class TruthClass():
+
+class TruthClass:
     def __init__(self, class_name, box, xdim, ydim):
         self.class_name = class_name
         self.box = box
