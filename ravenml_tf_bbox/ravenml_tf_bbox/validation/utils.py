@@ -67,12 +67,20 @@ def get_image_paths(dev_path):
 
     return image_paths, bbox_paths, metadata_paths
 
-def gen_images_from_paths(image_paths):
+
+def gen_images_from_paths(image_paths, gaussian_noise=0.0):
     for impath in image_paths:
         image = Image.open(impath)
-        image_np = load_image_into_numpy_array(image)
+        image = load_image_into_numpy_array(image)
 
-        yield image_np
+        if gaussian_noise > 0:
+            image = image.astype(np.float32) / 255
+            image += np.random.normal(scale=gaussian_noise, size=image.shape)
+            image = np.clip(image, 0, 1)
+            image = (image * 255).astype(np.uint8)
+
+        yield image
+
 
 def gen_truth_from_bbox_paths(bbox_paths):
 

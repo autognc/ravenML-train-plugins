@@ -14,19 +14,18 @@ def main():
     parser.add_argument('-d', '--directory', type=str, help="Path to image directory", required=True)
     parser.add_argument('-o', '--output', type=str, help="Path to put output", required=True)
     parser.add_argument('-n', '--num', type=int, help="Number of images to process (optional)")
-    parser.add_argument('-v', '--vis', type=bool, help="Write out visualizations (optional)")
-    parser.add_argument('--gaussian-noise', type=float, help="Add Gaussian noise with a certain stddev (optional)")
+    parser.add_argument('-v', '--vis', action="store_true", help="Write out visualizations (optional)")
+    parser.add_argument('--gaussian-noise', type=float, help="Add Gaussian noise with a certain stddev (optional)",
+                        default=0.0)
     args = parser.parse_args()
 
     category_index = utils.get_categories(args.labelmap)
     all_paths = utils.get_image_paths(args.directory)
     image_paths, bbox_paths, metadata_paths = tuple(sorted(paths)[:args.num] for paths in all_paths)
-    images = utils.gen_images_from_paths(image_paths)
+    np.random.seed(1234567)
+    images = utils.gen_images_from_paths(image_paths, gaussian_noise=args.gaussian_noise)
     all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
     graph = utils.get_default_graph(args.model)
-
-    if args.gaussian_noise:
-        images = (image + np.random.normal(scale=args.gaussian_noise, size=image.shape) for image in images)
 
     outputs, times = utils.run_inference_for_multiple_images(images, graph)
 
@@ -34,9 +33,8 @@ def main():
 
     if args.vis:
         print("Writing visualizations...")
-        images = utils.gen_images_from_paths(image_paths)  # refresh generator
-        if args.gaussian_noise:
-            images = (image + np.random.normal(scale=args.gaussian_noise, size=image.shape) for image in images)
+        np.random.seed(1234567)
+        images = utils.gen_images_from_paths(image_paths, gaussian_noise=args.gaussian_noise)  # refresh generator
         for detections, image, image_path in zip(all_detections, images, image_paths):
             for class_name, detection in detections.items():
                 visualization.draw_bounding_box_on_image_array(

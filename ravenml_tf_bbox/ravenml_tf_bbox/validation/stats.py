@@ -86,7 +86,6 @@ def calculate_statistics(all_truths, all_detections, category_index):
         precision[class_name] = prec
         parameters[class_name] = (TP, FP, FN, TN)
 
-
     return confidence, accuracy, recall, precision, iou, parameters
 
 
