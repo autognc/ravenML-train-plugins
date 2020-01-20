@@ -16,3 +16,6 @@ ssd_inception_v2_coco :
 faster_rcnn_resnet101_coco :
    type : faster_rcnn_resnet101
    url  : faster_rcnn_resnet101_coco_2018_01_28
+faster_rcnn_inception_v2_coco :
+   type : faster_rcnn_inception_v2
+   url  : faster_rcnn_inception_v2_coco_2018_01_28

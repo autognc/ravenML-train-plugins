@@ -1,0 +1,21 @@
+RMSProp:
+  train_steps: 40000
+  initial_learning_rate: 0.0004
+  decay_factor: 1.0
+  decay_steps: 1000000
+  l2_regularizer_weight: 0.0004
+  batch_size: 1
+  max_detections_per_class: 100
+  max_proposals: 50
+  use_dropout: true
+  dropout_keep_probability: 0.5
+  resize_height: 603
+  resize_width: 1072
+  anchor_size: 72
+  anchor_scales: "[0.25, 0.5, 1.0, 2.0]"
+  anchor_aspect_ratios: "[0.3333, 0.25, 0.5, 1.0, 2.0, 3.0]"
+  anchor_stride: 16
+  patch_gaussian_min_patch_size: 1
+  patch_gaussian_max_patch_size: 1072
+  patch_gaussian_max_stddev: 0.1
+
