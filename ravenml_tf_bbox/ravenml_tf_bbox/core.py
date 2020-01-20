@@ -9,6 +9,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from comet_ml import Experiment
 import os
 import click 
 import io
@@ -16,6 +17,7 @@ import sys
 import yaml
 import importlib
 import re
+from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
@@ -29,7 +31,6 @@ import ravenml_tf_bbox.validation.utils as utils
 import ravenml_tf_bbox.validation.stats as stats
 from google.protobuf import text_format
 
-from comet_ml import Experiment
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -39,7 +40,7 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 # put any custom Click options you create here
 comet_opt = click.option(
     '-c', '--comet', is_flag=True,
-    help='Disable comet on this training run.'
+    help='Enable comet on this training run.'
 )
 
 
@@ -101,6 +102,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
 
+    model_dir = os.path.join(base_dir, 'models/model')
+    pipeline_config_path = os.path.join(model_dir, 'pipeline.config')
+
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
@@ -110,7 +114,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         experiment.set_git_metadata()
         experiment.set_os_packages()
         experiment.set_pip_packages()
-    
+        experiment.log_asset(pipeline_config_path)
+
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
     try:
@@ -118,8 +123,6 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     except Exception as e:
         raise e
 
-    model_dir = os.path.join(base_dir, 'models/model')
-    pipeline_config_path = os.path.join(base_dir, 'models/model/pipeline.config')
 
     config = tf.estimator.RunConfig(model_dir=model_dir)
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
@@ -146,12 +149,15 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         eval_on_train_data=False)
 
     # actually train
-    progress = Spinner('Training model...', 'magenta')
-    if not verbose:
-        progress.start()
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-    if not verbose:
-        progress.succeed('Training model...Complete.')
+    with ExitStack() as stack:
+        if comet:
+            stack.enter_context(experiment.train())
+        progress = Spinner('Training model...', 'magenta')
+        if not verbose:
+            progress.start()
+        tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
+        if not verbose:
+            progress.succeed('Training model...Complete.')
     
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
@@ -166,48 +172,55 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     try:
         print("time for validation")
 
-        # path to label_map.pbtxt
-        label_path = extra_files[-1]
-        dev_path = train.dataset.path / 'splits/standard/dev'
-        output_path = base_dir / 'validation'
+        with ExitStack() as stack:
+            if comet:
+                stack.enter_context(experiment.validate())
+
+            # path to label_map.pbtxt
+            label_path = extra_files[-1]
+            dev_path = train.dataset.path / 'splits/standard/dev'
+            output_path = base_dir / 'validation'
 
 
-        category_index = utils.get_categories(str(label_path))
-        print("loaded label map")
+            category_index = utils.get_categories(str(label_path))
+            print("loaded label map")
 
-        image_paths, bbox_paths, metadata_paths = utils.get_image_paths(dev_path)
-        print("loaded image paths")
+            image_paths, bbox_paths, metadata_paths = utils.get_image_paths(dev_path)
+            print("loaded image paths")
 
-        images = utils.gen_images_from_paths(image_paths)
-        print("loaded images into array")
+            images = utils.gen_images_from_paths(image_paths)
+            print("loaded images into array")
 
-        all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
-        print("loaded truths into array")
+            all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
+            print("loaded truths into array")
 
-        graph = utils.get_default_graph(str(model_path))
-        print("loaded model graph")
+            graph = utils.get_default_graph(str(model_path))
+            print("loaded model graph")
 
-        #print("running inference for {} images..".format(str(len(images))))
-        outputs, times = utils.run_inference_for_multiple_images(images, graph)
-        print("inference done")
+            #print("running inference for {} images..".format(str(len(images))))
+            outputs, times = utils.run_inference_for_multiple_images(images, graph)
+            print("inference done")
 
-        all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
-        print("converted inference outputs to detected objects")
+            all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
+            print("converted inference outputs to detected objects")
 
-        confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
-        print('calculated model performance')
+            confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
+            print('calculated model performance')
 
-        stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
-        print('wrote model performance to json file')
+            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
+            print('wrote model performance to json file')
 
-        extra_files.append(output_path / 'stats.json')
+            extra_files.append(output_path / 'stats.json')
 
-        if comet:
-            experiment.log_asset(output_path / 'stats.json')
+            if comet:
+                experiment.log_asset(output_path / 'stats.json')
 
     except Exception as e:
         print("Exception:", e)
         metadata['validation_error'] = e
+
+    if comet:
+        experiment.log_asset_data(metadata, file_name="metadata.json")
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
