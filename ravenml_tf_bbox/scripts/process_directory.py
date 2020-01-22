@@ -1,10 +1,13 @@
+import tensorflow as tf
+import matplotlib.pyplot as plt
 import argparse
-import numpy as np
+import json
 import os
 import cv2
 import ravenml_tf_bbox.validation.utils as utils
 import ravenml_tf_bbox.validation.stats as stats
 import object_detection.utils.visualization_utils as visualization
+import time
 
 
 def main():
@@ -15,40 +18,66 @@ def main():
     parser.add_argument('-o', '--output', type=str, help="Path to put output", required=True)
     parser.add_argument('-n', '--num', type=int, help="Number of images to process (optional)")
     parser.add_argument('-v', '--vis', action="store_true", help="Write out visualizations (optional)")
-    parser.add_argument('--gaussian-noise', type=float, help="Add Gaussian noise with a certain stddev (optional)",
-                        default=0.0)
+    parser.add_argument('--gaussian-noise', type=float, help="Add Gaussian noise with a certain stddev (optional)")
     args = parser.parse_args()
 
-    category_index = utils.get_categories(args.labelmap)
-    all_paths = utils.get_image_paths(args.directory)
-    image_paths, bbox_paths, metadata_paths = tuple(sorted(paths)[:args.num] for paths in all_paths)
-    np.random.seed(1234567)
-    images = utils.gen_images_from_paths(image_paths, gaussian_noise=args.gaussian_noise)
-    all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
-    graph = utils.get_default_graph(args.model)
+    graph = utils.get_model_graph(args.model)
+    with graph.as_default():
+        image_dataset = utils.get_image_dataset(args.directory)
+        bboxes = list(utils.gen_truth_bboxes(args.directory))
+        if args.num:
+            image_dataset = image_dataset.take(args.num)
+            bboxes = bboxes[:args.num]
 
-    outputs, times = utils.run_inference_for_multiple_images(images, graph)
+        if args.gaussian_noise:
+            def add_gaussian_noise(img):
+                img = tf.cast(img, tf.float32) / 255
+                img += tf.random.normal(tf.shape(img), stddev=args.gaussian_noise)
+                img = tf.clip_by_value(img, 0, 1)
+                return tf.cast(img * 255, tf.uint8)
+            image_dataset = image_dataset.map(add_gaussian_noise)
 
-    all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
+        input_tensor, output_tensors = utils.get_input_and_output_tensors(graph)
+        image_tensor = image_dataset.make_one_shot_iterator().get_next()
+        category_index = utils.get_category_index(args.labelmap)
+        count = 0
+        all_outputs = []
+        times = []
+        with tf.Session() as sess:
+            try:
+                while True:
+                    image = sess.run(image_tensor)
+                    start = time.time()
+                    raw_output = sess.run(output_tensors, feed_dict={input_tensor: image[None, ...]})
+                    end = time.time()
+                    output = utils.parse_inference_output(category_index, raw_output, image.shape[0], image.shape[1])
+                    if args.vis:
+                        for class_name, detections in output.items():
+                            score, bbox = detections[0]  # only take top detection b/c there's only once instance
+                            visualization.draw_bounding_box_on_image_array(
+                                image, bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax'],
+                                color='green', thickness=4, display_str_list=[f'{class_name}: {int(score * 100)}%'],
+                                use_normalized_coordinates=False
+                            )
+                        cv2.imwrite(os.path.join(args.output, f'{count}.png'), image)
+                    print(f'Image: {count}, time: {end - start}')
+                    times.append(end - start)
+                    all_outputs.append(output)
+                    count += 1
+            except tf.errors.OutOfRangeError:
+                pass
 
-    if args.vis:
-        print("Writing visualizations...")
-        np.random.seed(1234567)
-        images = utils.gen_images_from_paths(image_paths, gaussian_noise=args.gaussian_noise)  # refresh generator
-        for detections, image, image_path in zip(all_detections, images, image_paths):
-            for class_name, detection in detections.items():
-                visualization.draw_bounding_box_on_image_array(
-                    image, detection.box['ymin'], detection.box['xmin'], detection.box['ymax'], detection.box['xmax'],
-                    color='green', thickness=4, display_str_list=[f'{class_name}: {int(detection.score * 100)}%']
-                )
-            image_name = os.path.basename(image_path)
-            cv2.imwrite(os.path.join(args.output, image_name), image)
+    coco_stats = stats.calculate_coco_statistics(all_outputs, bboxes, category_index)
+    avg_time = sum(times) / len(times)
+    statistics = {
+        'coco_stats': coco_stats,
+        'average inference time': avg_time
+    }
+    with open(os.path.join(args.output, 'stats.json'), 'w') as f:
+        json.dump(statistics, f, indent=2)
 
-    confidence, accuracy, recall, precision, iou, parameters =\
-        stats.calculate_statistics(all_truths, all_detections, category_index)
-
-    stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index,
-                              args.output)
+    stats.plot_pr_curve(all_outputs, bboxes, category_index)
+    plt.savefig(os.path.join(args.output, 'pr_curve.png'))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ import sys
 import yaml
 import importlib
 import re
+import json
+import matplotlib.pyplot as plt
 from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
@@ -161,17 +163,14 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
-    model_path = base_dir / 'models' / 'model' / 'export' / 'exported_model'
-    model_path = model_path / os.listdir(model_path)[0] / 'saved_model.pb'        
-    
+
     # get extra config files
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
 
     try:
-        print("time for validation")
-
+        click.echo("Evaluating model...")
         with ExitStack() as stack:
             if comet:
                 stack.enter_context(experiment.validate())
@@ -181,39 +180,37 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             dev_path = train.dataset.path / 'splits/standard/dev'
             output_path = base_dir / 'validation'
 
+            graph = utils.get_model_graph(str(model_path))
+            with graph.as_default():
+                image_dataset = utils.get_image_dataset(dev_path)
+                bboxes = list(utils.gen_truth_bboxes(dev_path))
+                input_tensor, output_tensors = utils.get_input_and_output_tensors(graph)
+                image_tensor = image_dataset.make_one_shot_iterator().get_next()
+                category_index = utils.get_category_index(str(label_path))
+                all_outputs = []
+                with tf.Session() as sess:
+                    try:
+                        while True:
+                            image = sess.run(image_tensor)
+                            raw_output = sess.run(output_tensors, feed_dict={input_tensor: image[None, ...]})
+                            output = utils.parse_inference_output(category_index, raw_output,
+                                                                  image.shape[0], image.shape[1])
+                            all_outputs.append(output)
+                    except tf.errors.OutOfRangeError:
+                        pass
 
-            category_index = utils.get_categories(str(label_path))
-            print("loaded label map")
+            coco_stats = stats.calculate_coco_statistics(all_outputs, bboxes, category_index)
+            with open(output_path / 'stats.json', 'w') as f:
+                json.dump(coco_stats, f, indent=2)
 
-            image_paths, bbox_paths, metadata_paths = utils.get_image_paths(dev_path)
-            print("loaded image paths")
-
-            images = utils.gen_images_from_paths(image_paths)
-            print("loaded images into array")
-
-            all_truths = utils.gen_truth_from_bbox_paths(bbox_paths)
-            print("loaded truths into array")
-
-            graph = utils.get_default_graph(str(model_path))
-            print("loaded model graph")
-
-            #print("running inference for {} images..".format(str(len(images))))
-            outputs, times = utils.run_inference_for_multiple_images(images, graph)
-            print("inference done")
-
-            all_detections = utils.convert_inference_output_to_detected_objects(category_index, outputs)
-            print("converted inference outputs to detected objects")
-
-            confidence, accuracy, recall, precision, iou, parameters = stats.calculate_statistics(all_truths, all_detections, category_index)
-            print('calculated model performance')
-
-            stats.write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path)
-            print('wrote model performance to json file')
+            stats.plot_pr_curve(all_outputs, bboxes, category_index)
+            plt.savefig(output_path / 'pr_curve.png')
 
             extra_files.append(output_path / 'stats.json')
-
+            extra_files.append(output_path / 'pr_curve.png')
             if comet:
                 experiment.log_asset(output_path / 'stats.json')
+                experiment.log_image(output_path / 'pr_curve.png')
 
     except Exception as e:
         print("Exception:", e)

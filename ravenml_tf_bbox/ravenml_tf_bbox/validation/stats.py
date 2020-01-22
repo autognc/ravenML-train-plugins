@@ -1,18 +1,17 @@
 import numpy as np
-from collections import defaultdict
-import json
-import os
-from pathlib import Path
-import math
+import matplotlib.pyplot as plt
+from object_detection.metrics.coco_evaluation import CocoDetectionEvaluator
+from object_detection.core.standard_fields import InputDataFields, DetectionResultFields
+from object_detection.utils.object_detection_evaluation import ObjectDetectionEvaluator
+
 
 def get_area(box):
     x = box[0] - box[2]
     y = box[1] - box[3]
-
     return x*y
 
+
 def get_iou(t, d):
-    
     # xmin, ymin, xmax, ymax
     # union box
     u = (min(t['xmin'], d['xmin']), min(t['ymin'],d['ymin']), max(t['xmax'], d['xmax']), max(t['ymax'], d['ymax']))
@@ -21,123 +20,101 @@ def get_iou(t, d):
     i = (max(t['xmin'], d['xmin']), max(t['ymin'],d['ymin']), min(t['xmax'], d['xmax']), min(t['ymax'], d['ymax']))
     
     iou = get_area(i) / get_area(u)
-
     return iou
 
 
-def calculate_statistics(all_truths, all_detections, category_index):
-    confidence = defaultdict()
-    accuracy = defaultdict()
-    recall = defaultdict()
-    precision = defaultdict()
-    iou = defaultdict()
-    parameters = defaultdict()
+def calculate_coco_statistics(all_outputs, all_bboxes, category_index, iou_threshold=0.5):
+    # create coco evaluator
+    coco_evaluator = CocoDetectionEvaluator(list(category_index.values()))
+    # OD evaluator (older than coco, I left it here in case we need it later)
+    """
+    od_evaluator = ObjectDetectionEvaluator(
+        list(category_index.values()),
+        matching_iou_threshold=iou_threshold,
+        evaluate_corlocs=True,
+        evaluate_precision_recall=True
+    )
+    """
+    for i, (output_dict, bbox_dict) in enumerate(zip(all_outputs, all_bboxes)):
+        for class_id in category_index.keys():
+            class_name = category_index[class_id]['name']
+            outputs = output_dict[class_name]  # list of (score, bbox) for this class
+            bboxes = bbox_dict[class_name]  # list of bboxes for this class
 
-    for class_id in category_index:
-        class_name = category_index[class_id]['name']
-        iou[class_name] = []
-        confidence[class_name] = []
+            # add ground truth for this class and this image to the evaluator
+            boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in bboxes]
+            groundtruth_dict = {
+                InputDataFields.groundtruth_boxes: np.array(boxes, dtype=np.float32),
+                InputDataFields.groundtruth_classes: np.full(len(boxes), class_id, dtype=np.float32)
+            }
+            coco_evaluator.add_single_ground_truth_image_info(i, groundtruth_dict)
+            #  od_evaluator.add_single_ground_truth_image_info(i, groundtruth_dict)
 
-        TP = 0
-        TN = 0
-        FN = 0
-        FP = 0
+            # add detections for this class and this image to the evaluator
+            scores, boxes = zip(*outputs)
+            boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in boxes]
+            detections_dict = {
+                DetectionResultFields.detection_boxes: np.array(boxes, dtype=np.float32),
+                DetectionResultFields.detection_scores: np.array(scores, dtype=np.float32),
+                DetectionResultFields.detection_classes: np.full(len(boxes), class_id, dtype=np.float32)
+            }
+            coco_evaluator.add_single_detected_image_info(i, detections_dict)
+            #  od_evaluator.add_single_detected_image_info(i, detections_dict)
 
-        for truth, detected in zip(all_truths, all_detections):
-            # true positive
-            if class_name in detected and class_name in truth:
-                TP += 1
-                iou[class_name].append(get_iou(truth[class_name].box_norm, detected[class_name].box))
+    return coco_evaluator.evaluate()
 
-                confidence[class_name].append(detected[class_name].score)
 
-            # false positive, we want low scores
-            elif class_name in detected and class_name not in truth:
-                FP += 1
-                confidence[class_name].append(1 - detected[class_name].score)
-            
-            # false negative, do we want score = 0?? idk
-            elif class_name not in detected and class_name in truth:
-                FN += 1
+def calculate_confusion_matrix(all_outputs, all_bboxes, category_index, confidence_threshold, iou_threshold):
+    confusion_matrix = {
+        'true_positive': 0,
+        'false_positive': 0,
+        'true_negative': 0,
+        'false_negative': 0
+    }
+    for output_dict, bbox_dict in zip(all_outputs, all_bboxes):
+        for class_id in category_index.keys():
+            class_name = category_index[class_id]['name']
+            outputs = output_dict[class_name]  # list of (score, bbox) for this class
+            bboxes = bbox_dict[class_name]  # list of bboxes for this class
 
-            # true negative, do we want score = 100?? idk
+            # NOTE: normally, we would filter all of the outputs by the confidence threshold, and any additional
+            # detections beyond the correct one would be counted as false positives. However, since we know that there's
+            # only one instance of each class, we're just going to take the top prediction and ignore the rest. This
+            # will decrease the false positive rate by a little bit, but it's representative of our actual application,
+            # since we will never look at more than the top prediction when we know there's only one spacecraft
+            if outputs and outputs[0][0] >= confidence_threshold:
+                # the model made a detection, so check if it's correct
+                if bboxes and get_iou(bboxes[0], outputs[0][1]) >= iou_threshold:
+                    confusion_matrix['true_positive'] += 1
+                else:
+                    confusion_matrix['false_positive'] += 1
             else:
-                TN += 1
-            
-
-        if TP+FP+FN+TN == 0:
-            acc = 0
-        else:
-            acc = (TP+TN) / (TP+FP+FN+TN)
-        
-        if TP+FN == 0:
-            rec = 0
-        else:
-            rec = TP / (TP+FN)
-
-        if TP+FP == 0:
-            prec = 0
-        else:
-            prec = TP / (TP+FP)
-
-        
-        accuracy[class_name] = acc
-        recall[class_name] = rec
-        precision[class_name] = prec
-        parameters[class_name] = (TP, FP, FN, TN)
-
-    return confidence, accuracy, recall, precision, iou, parameters
+                # the model did not make a detection, so check if there was actually something there
+                if bboxes:
+                    confusion_matrix['false_negative'] += 1
+                else:
+                    confusion_matrix['true_negative'] += 1
+    return confusion_matrix
 
 
-def write_stats_to_json(confidence, accuracy, recall, precision, iou, parameters, times, category_index, output_path):
-
-    stats = defaultdict()
-    stats['initialization_time'] = round(times[0],3)
-    stats['inference_time_avg'] = round(sum(times[1:]) / len(times[1:]), 3)
-
-    for class_id in category_index:
-        class_name = category_index[class_id]['name']
-        
-        if sum(parameters[class_name]) != 0:
-            num_instances = sum(parameters[class_name])
-            TP, FP, FN, TN = parameters[class_name]
-            avg_confidence = float(round(np.average(confidence[class_name]), 3))
-            acc_stat = round(accuracy[class_name], 3)
-            recall_stat = round(recall[class_name], 3)
-            precision_stat = round(precision[class_name], 3)
-            avg_iou = float(round(np.average(iou[class_name]), 3))
-
-        else:
-            num_instances = 0
-            TP, FP, FN, TN = 0, 0, 0, 0
-            avg_confidence = 0.000
-            acc_stat = 0
-            recall_stat = 0.000
-            precision_stat = 0.000
-            avg_iou = 0.000
-
-        class_stat = {"num_instances": num_instances,
-                      "avg_confidence": avg_confidence,
-                      "accuracy": acc_stat,
-                      "recall": recall_stat,
-                      "precision": precision_stat,
-                      "avg_iou": avg_iou}
-
-        class_stat["parameters"] = defaultdict()
-        class_stat["parameters"]['true_positive'] = TP
-        class_stat["parameters"]['false_positive'] = FP
-        class_stat["parameters"]['false_negative'] = FN
-        class_stat["parameters"]['true_negative'] = TN
-        
-        stats[class_name] = defaultdict()
-        #stats[class_name]['name'] = category_index[class_id]['name']
-        stats[class_name]['class_stats'] = defaultdict()
-        
-        for key in class_stat:
-            stats[class_name]['class_stats'][key] = class_stat[key]
-
-    os.makedirs(Path(output_path), exist_ok=True)
-
-    json_path = Path(output_path) / 'stats.json'
-    with open(json_path, 'w') as fp:
-        json.dump(stats, fp, indent=4)
+def plot_pr_curve(all_outputs, all_bboxes, category_index, iou_thresholds=(0.1, 0.25, 0.5, 0.75, 0.9)):
+    plt.clf()
+    fig, ax = plt.subplots()
+    for iou_threshold in iou_thresholds:
+        precisions = []
+        recalls = []
+        for score in np.arange(0, 1.025, 0.025)[::-1]:
+            cf = calculate_confusion_matrix(all_outputs, all_bboxes, category_index, score, iou_threshold)
+            if cf['true_positive'] + cf['false_negative'] > 0:
+                recalls.append(cf['true_positive'] / (cf['true_positive'] + cf['false_negative']))
+            else:
+                recalls.append(0)
+            if cf['true_positive'] + cf['false_positive'] > 0:
+                precisions.append(cf['true_positive'] / (cf['true_positive'] + cf['false_positive']))
+            else:
+                precisions.append(0)
+        ax.scatter(np.array(recalls), np.array(precisions), 10, label=str(iou_threshold))
+    ax.set_title('PR Curve')
+    ax.set_xlabel('Recall')
+    ax.set_ylabel('Precision')
+    plt.legend(title="IOU Threshold", loc='upper left')
