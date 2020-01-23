@@ -1,6 +1,7 @@
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import argparse
+import sys
 import json
 import os
 import cv2
@@ -20,6 +21,10 @@ def main():
     parser.add_argument('-v', '--vis', action="store_true", help="Write out visualizations (optional)")
     parser.add_argument('--gaussian-noise', type=float, help="Add Gaussian noise with a certain stddev (optional)")
     args = parser.parse_args()
+
+    if not os.path.exists(args.output):
+        print(f"Path '{args.output}' does not exist.")
+        sys.exit(1)
 
     graph = utils.get_model_graph(args.model)
     with graph.as_default():
@@ -68,7 +73,7 @@ def main():
                 pass
 
     coco_stats = stats.calculate_coco_statistics(all_outputs, bboxes, category_index)
-    avg_time = sum(times) / len(times)
+    avg_time = sum(times[1:]) / (len(times) - 1)  # ignore first time b/c it's always longer
     statistics = {
         'coco_stats': coco_stats,
         'average inference time': avg_time
