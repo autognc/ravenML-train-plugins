@@ -183,11 +183,12 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             graph = utils.get_model_graph(str(model_path))
             with graph.as_default():
                 image_dataset = utils.get_image_dataset(dev_path)
-                bboxes = list(utils.gen_truth_bboxes(dev_path))
+                truth_data = list(utils.gen_truth_data(dev_path))
+                bboxes, centroids = zip(*truth_data)
                 input_tensor, output_tensors = utils.get_input_and_output_tensors(graph)
                 image_tensor = image_dataset.make_one_shot_iterator().get_next()
                 category_index = utils.get_category_index(str(label_path))
-                all_outputs = []
+                outputs = []
                 with tf.Session() as sess:
                     try:
                         while True:
@@ -195,22 +196,38 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
                             raw_output = sess.run(output_tensors, feed_dict={input_tensor: image[None, ...]})
                             output = utils.parse_inference_output(category_index, raw_output,
                                                                   image.shape[0], image.shape[1])
-                            all_outputs.append(output)
+                            outputs.append(output)
                     except tf.errors.OutOfRangeError:
                         pass
 
-            coco_stats = stats.calculate_coco_statistics(all_outputs, bboxes, category_index)
+            coco_stats = stats.calculate_coco_statistics(outputs, bboxes, category_index)
+            statistics = {
+                'coco_stats': coco_stats,
+                'average groundtruth bbox to groundtruth centroid distance':
+                    stats.calculate_truth_bbox_to_truth_centroid_error(bboxes, centroids, category_index),
+                'distances@25': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.25),
+                'distances@50': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.5),
+                'distances@75': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.75),
+            }
             with open(output_path / 'stats.json', 'w') as f:
-                json.dump(coco_stats, f, indent=2)
-
-            stats.plot_pr_curve(all_outputs, bboxes, category_index)
-            plt.savefig(output_path / 'pr_curve.png')
+                json.dump(statistics, f, indent=2)
 
             extra_files.append(output_path / 'stats.json')
-            extra_files.append(output_path / 'pr_curve.png')
             if comet:
                 experiment.log_asset(output_path / 'stats.json')
-                experiment.log_image(output_path / 'pr_curve.png')
+
+            for cls in category_index.values():
+                name = cls['name']
+                stats.plot_pr_curve(name, outputs, bboxes, category_index)
+                plt.savefig(output_path / f'pr_curve_{name}.png')
+                stats.plot_dr_curve(name, outputs, bboxes, centroids, category_index)
+                plt.savefig(output_path / f'dr_curve_{name}.png')
+
+                extra_files.append(output_path / f'pr_curve_{name}.png')
+                extra_files.append(output_path / f'dr_curve_{name}.png')
+                if comet:
+                    experiment.log_image(output_path / f'pr_curve_{name}.png')
+                    experiment.log_image(output_path / f'dr_curve_{name}.png')
 
     except Exception as e:
         print("Exception:", e)
@@ -218,6 +235,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
+        experiment.log_asset(model_path)
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result

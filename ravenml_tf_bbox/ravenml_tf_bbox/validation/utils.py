@@ -1,5 +1,3 @@
-import warnings
-warnings.filterwarnings("ignore")
 import os
 import time
 import glob
@@ -8,35 +6,23 @@ import numpy as np
 import tensorflow as tf
 import xml.etree.ElementTree as ET
 from object_detection.utils import label_map_util
+import json
 
 
-def gen_truth_bboxes(dir_path):
+def gen_truth_data(dir_path):
     """
-    Gets ground truth bboxes from bboxLabels_*.xml files.
-    :param dir_path: the directory to load bboxes from
-    :yield: a dict of the form {classname: [bbox]} where bboxes are dicts
-    with keys xmin, xmax, ymin, ymax (non-normalized).
+    Gets ground truth bboxes and centroids from meta_*.json files.
+    :param dir_path: the directory to load metadata from
+    :return: a generator that, for each image, yield a tuple (bbox_dict, centroid_dict) where:
+        bbox_dict = {classname: bbox} where bbox is a dictionary with keys {xmin, xmax, ymin, ymax}
+        and centroid_dict = {classname: centroid} where each centroid = (y, x).
+        Both bboxes and centroids are in non-normalized (pixel) coordinates.
     """
-    bbox_files = sorted(glob.glob(os.path.join(dir_path, "bboxLabels_*.xml")))
-    for bbox_file in bbox_files:
-        # load bounding boxes
-        truth = defaultdict(list)
-        tree = ET.parse(bbox_file)
-        root = tree.getroot()
-        size = root.find("size")
-        # xdim = int(size.find("width").text)
-        # ydim = int(size.find("height").text)
-        for classmember in root.findall('object'):
-            classname = classmember.find("name").text
-            for bndbox in classmember.findall("bndbox"):
-                bbox = {
-                    'xmin': int(bndbox.find("xmin").text),
-                    'xmax': int(bndbox.find("xmax").text),
-                    'ymin': int(bndbox.find("ymin").text),
-                    'ymax': int(bndbox.find("ymax").text)
-                }
-                truth[classname].append(bbox)
-        yield truth
+    meta_files = sorted(glob.glob(os.path.join(dir_path, "meta_*")))
+    for meta_file in meta_files:
+        with open(meta_file, 'r') as f:
+            meta = json.load(f)
+        yield meta['bboxes'], meta['centroids']
 
 
 def get_image_dataset(dir_path):
@@ -120,4 +106,11 @@ def parse_inference_output(category_index, output, image_height, image_width):
         detections[class_name].append((score, bbox))
 
     return detections
+
+
+def add_gaussian_noise(img, stddev):
+    img = tf.cast(img, tf.float32) / 255
+    img += tf.random.normal(tf.shape(img), stddev=stddev)
+    img = tf.clip_by_value(img, 0, 1)
+    return tf.cast(img * 255, tf.uint8)
 

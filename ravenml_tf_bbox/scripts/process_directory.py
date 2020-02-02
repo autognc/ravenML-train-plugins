@@ -29,24 +29,20 @@ def main():
     graph = utils.get_model_graph(args.model)
     with graph.as_default():
         image_dataset = utils.get_image_dataset(args.directory)
-        bboxes = list(utils.gen_truth_bboxes(args.directory))
+        truth_data = list(utils.gen_truth_data(args.directory))
         if args.num:
             image_dataset = image_dataset.take(args.num)
-            bboxes = bboxes[:args.num]
+            truth_data = truth_data[:args.num]
+        bboxes, centroids = zip(*truth_data)
 
         if args.gaussian_noise:
-            def add_gaussian_noise(img):
-                img = tf.cast(img, tf.float32) / 255
-                img += tf.random.normal(tf.shape(img), stddev=args.gaussian_noise)
-                img = tf.clip_by_value(img, 0, 1)
-                return tf.cast(img * 255, tf.uint8)
-            image_dataset = image_dataset.map(add_gaussian_noise)
+            image_dataset = image_dataset.map(lambda img: utils.add_gaussian_noise(img, args.gaussian_noise))
 
         input_tensor, output_tensors = utils.get_input_and_output_tensors(graph)
         image_tensor = image_dataset.make_one_shot_iterator().get_next()
         category_index = utils.get_category_index(args.labelmap)
         count = 0
-        all_outputs = []
+        outputs = []
         times = []
         with tf.Session() as sess:
             try:
@@ -57,8 +53,9 @@ def main():
                     end = time.time()
                     output = utils.parse_inference_output(category_index, raw_output, image.shape[0], image.shape[1])
                     if args.vis:
-                        for class_name, detections in output.items():
-                            score, bbox = detections[0]  # only take top detection b/c there's only once instance
+                        for (class_name, detections), bbox in zip(output.items(), bboxes):
+                            score, _bbox = detections[0]  # only take top detection b/c there's only once instance
+                            bbox = bbox['gateway']
                             visualization.draw_bounding_box_on_image_array(
                                 image, bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax'],
                                 color='green', thickness=4, display_str_list=[f'{class_name}: {int(score * 100)}%'],
@@ -67,22 +64,31 @@ def main():
                         cv2.imwrite(os.path.join(args.output, f'{count}.png'), image)
                     print(f'Image: {count}, time: {end - start}')
                     times.append(end - start)
-                    all_outputs.append(output)
+                    outputs.append(output)
                     count += 1
             except tf.errors.OutOfRangeError:
                 pass
 
-    coco_stats = stats.calculate_coco_statistics(all_outputs, bboxes, category_index)
+    coco_stats = stats.calculate_coco_statistics(outputs, bboxes, category_index)
     avg_time = sum(times[1:]) / (len(times) - 1)  # ignore first time b/c it's always longer
     statistics = {
         'coco_stats': coco_stats,
-        'average inference time': avg_time
+        'average inference time': avg_time,
+        'average groundtruth bbox to groundtruth centroid distance':
+            stats.calculate_truth_bbox_to_truth_centroid_error(bboxes, centroids, category_index),
+        'distances@25': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.25),
+        'distances@50': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.5),
+        'distances@75': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.75),
     }
     with open(os.path.join(args.output, 'stats.json'), 'w') as f:
         json.dump(statistics, f, indent=2)
 
-    stats.plot_pr_curve(all_outputs, bboxes, category_index)
-    plt.savefig(os.path.join(args.output, 'pr_curve.png'))
+    for cls in category_index.values():
+        name = cls['name']
+        stats.plot_pr_curve(name, outputs, bboxes, category_index)
+        plt.savefig(os.path.join(args.output, f'pr_curve_{name}.png'))
+        stats.plot_dr_curve(name, outputs, bboxes, centroids, category_index)
+        plt.savefig(os.path.join(args.output, f'dr_curve_{name}.png'))
 
 
 if __name__ == "__main__":
