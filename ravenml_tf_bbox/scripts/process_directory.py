@@ -53,9 +53,8 @@ def main():
                     end = time.time()
                     output = utils.parse_inference_output(category_index, raw_output, image.shape[0], image.shape[1])
                     if args.vis:
-                        for (class_name, detections), bbox in zip(output.items(), bboxes):
-                            score, _bbox = detections[0]  # only take top detection b/c there's only once instance
-                            bbox = bbox['gateway']
+                        for class_name, detections in output.items():
+                            score, bbox = detections[0]  # only take top detection b/c there's only once instance
                             visualization.draw_bounding_box_on_image_array(
                                 image, bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax'],
                                 color='green', thickness=4, display_str_list=[f'{class_name}: {int(score * 100)}%'],
