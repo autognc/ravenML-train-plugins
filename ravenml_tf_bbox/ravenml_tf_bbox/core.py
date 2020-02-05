@@ -17,20 +17,19 @@ import sys
 import yaml
 import importlib
 import re
-import json
-import matplotlib.pyplot as plt
+import glob
 from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
 from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
-from ravenml.data.interfaces import Dataset
-from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input 
+from ravenml.utils.question import cli_spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
 from ravenml_tf_bbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
 import ravenml_tf_bbox.validation.utils as utils
-import ravenml_tf_bbox.validation.stats as stats
+from ravenml_tf_bbox.validation.model import BoundingBoxModel
+from ravenml_tf_bbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 
 
@@ -154,13 +153,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     with ExitStack() as stack:
         if comet:
             stack.enter_context(experiment.train())
-        progress = Spinner('Training model...', 'magenta')
-        if not verbose:
-            progress.start()
+        click.echo('Training model...')
         tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-        if not verbose:
-            progress.succeed('Training model...Complete.')
-    
+        click.echo('Training complete')
+
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
 
@@ -168,6 +164,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = frozen_graph_path
     local_mode = train.artifact_path is not None
+    if comet:
+        experiment.log_asset(model_path)
 
     try:
         click.echo("Evaluating model...")
@@ -180,62 +178,35 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             dev_path = train.dataset.path / 'splits/standard/dev'
             output_path = base_dir / 'validation'
 
-            graph = utils.get_model_graph(str(model_path))
-            with graph.as_default():
-                image_dataset = utils.get_image_dataset(dev_path)
-                truth_data = list(utils.gen_truth_data(dev_path))
-                bboxes, centroids = zip(*truth_data)
-                input_tensor, output_tensors = utils.get_input_and_output_tensors(graph)
-                image_tensor = image_dataset.make_one_shot_iterator().get_next()
-                category_index = utils.get_category_index(str(label_path))
-                outputs = []
-                with tf.Session() as sess:
-                    try:
-                        while True:
-                            image = sess.run(image_tensor)
-                            raw_output = sess.run(output_tensors, feed_dict={input_tensor: image[None, ...]})
-                            output = utils.parse_inference_output(category_index, raw_output,
-                                                                  image.shape[0], image.shape[1])
-                            outputs.append(output)
-                    except tf.errors.OutOfRangeError:
-                        pass
+            image_dataset = utils.get_image_dataset(dev_path)
+            truth_data = list(utils.gen_truth_data(dev_path))
 
-            coco_stats = stats.calculate_coco_statistics(outputs, bboxes, category_index)
-            statistics = {
-                'coco_stats': coco_stats,
-                'average groundtruth bbox to groundtruth centroid distance':
-                    stats.calculate_truth_bbox_to_truth_centroid_error(bboxes, centroids, category_index),
-                'distances@25': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.25),
-                'distances@50': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.5),
-                'distances@75': stats.calculate_distance_statistics(outputs, bboxes, centroids, category_index, 0.75),
-            }
-            with open(output_path / 'stats.json', 'w') as f:
-                json.dump(statistics, f, indent=2)
+            model = BoundingBoxModel(model_path, label_path)
+            evaluator = BoundingBoxEvaluator(model.category_index)
+            image_tensor = image_dataset.make_one_shot_iterator().get_next()
+            with tf.Session() as sess:
+                with model.start_session():
+                    for i, (bbox, centroid) in enumerate(truth_data):
+                        image = sess.run(image_tensor)
+                        output, inference_time = model.run_inference_on_single_image(image)
+                        evaluator.add_single_result(output, inference_time, bbox, centroid)
 
-            extra_files.append(output_path / 'stats.json')
+            evaluator.calculate_default_and_save(output_path)
+            evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
+
+            extra_files.append(os.path.join(output_path, 'stats.json'))
+            extra_files.append(os.path.join(output_path, 'validation_results.pickle'))
+            extra_files += glob.glob(os.path.join(output_path, '*_curve_*.png'))
             if comet:
-                experiment.log_asset(output_path / 'stats.json')
-
-            for cls in category_index.values():
-                name = cls['name']
-                stats.plot_pr_curve(name, outputs, bboxes, category_index)
-                plt.savefig(output_path / f'pr_curve_{name}.png')
-                stats.plot_dr_curve(name, outputs, bboxes, centroids, category_index)
-                plt.savefig(output_path / f'dr_curve_{name}.png')
-
-                extra_files.append(output_path / f'pr_curve_{name}.png')
-                extra_files.append(output_path / f'dr_curve_{name}.png')
-                if comet:
-                    experiment.log_image(output_path / f'pr_curve_{name}.png')
-                    experiment.log_image(output_path / f'dr_curve_{name}.png')
-
+                experiment.log_asset(os.path.join(output_path, 'stats.json'))
+                for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
+                    experiment.log_image(img)
     except Exception as e:
         print("Exception:", e)
-        metadata['validation_error'] = e
+        metadata['validation_error'] = str(e)
 
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
-        experiment.log_asset(model_path)
 
     result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
     return result
