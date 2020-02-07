@@ -162,7 +162,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
     # get extra config files
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
-    model_path = frozen_graph_path
+    model_path = str(frozen_graph_path)
     local_mode = train.artifact_path is not None
     if comet:
         experiment.log_asset(model_path)
@@ -175,8 +175,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
             # path to label_map.pbtxt
             label_path = extra_files[-1]
-            dev_path = train.dataset.path / 'splits/standard/dev'
-            output_path = base_dir / 'validation'
+            dev_path = str(train.dataset.path / 'splits/standard/dev')
+            output_path = str(base_dir / 'validation')
 
             image_dataset = utils.get_image_dataset(dev_path)
             truth_data = list(utils.gen_truth_data(dev_path))
