@@ -19,6 +19,7 @@ import importlib
 import re
 import glob
 from contextlib import ExitStack
+import traceback
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
@@ -119,10 +120,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
-    try:
-        num_train_steps = int(num_train_steps)
-    except Exception as e:
-        raise e
+    num_train_steps = int(num_train_steps)
 
 
     config = tf.estimator.RunConfig(model_dir=model_dir)
@@ -174,12 +172,12 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
                 stack.enter_context(experiment.validate())
 
             # path to label_map.pbtxt
-            label_path = extra_files[-1]
-            dev_path = str(train.dataset.path / 'splits/standard/dev')
+            label_path = str(extra_files[-1])
+            test_path = str(train.dataset.path / 'test')
             output_path = str(base_dir / 'validation')
 
-            image_dataset = utils.get_image_dataset(dev_path)
-            truth_data = list(utils.gen_truth_data(dev_path))
+            image_dataset = utils.get_image_dataset(test_path)
+            truth_data = list(utils.gen_truth_data(test_path))
 
             model = BoundingBoxModel(model_path, label_path)
             evaluator = BoundingBoxEvaluator(model.category_index)
@@ -201,14 +199,13 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
                 experiment.log_asset(os.path.join(output_path, 'stats.json'))
                 for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
                     experiment.log_image(img)
-    except Exception as e:
-        print("Exception:", e)
-        metadata['validation_error'] = str(e)
+    except Exception:
+        metadata['validation_error'] = traceback.format_exc()
 
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
 
-    result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
+    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, local_mode)
     return result
     
 

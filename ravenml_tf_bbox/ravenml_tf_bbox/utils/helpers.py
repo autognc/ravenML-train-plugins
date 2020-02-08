@@ -63,7 +63,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         num_classes = len(ids)
     
     # get num eval examples from file
-    num_eval_file = data_path / 'splits/standard/train/test.record.numexamples'
+    num_eval_file = data_path / 'splits/complete/train/test.record.numexamples'
     try:
         with open(num_eval_file, "r") as f:
             lines = f.readlines()
@@ -122,7 +122,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     # place TF record files into training directory
     num_train_records = 0
     num_test_records = 0
-    records_path = data_path / 'splits/standard/train'
+    records_path = data_path / 'splits/complete/train'
     for record_file in os.listdir(records_path):
         if record_file.startswith('train.record-'):
             num_train_records += 1
