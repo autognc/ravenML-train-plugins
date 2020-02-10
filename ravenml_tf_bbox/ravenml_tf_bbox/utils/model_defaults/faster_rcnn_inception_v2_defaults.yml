@@ -5,16 +5,16 @@ RMSProp:
   decay_steps: 1000000
   l2_regularizer_weight: 0.0
   batch_size: 1
-  max_detections_per_class: 1
+  max_detections_per_class: 100
   max_proposals: 50
   use_dropout: true
   dropout_keep_probability: 0.5
-  anchor_size: 10
-  anchor_scales: "[1, 1.414, 2, 2.828, 4.0, 5.657, 8.0, 11.314]"
-  anchor_aspect_ratios: "[0.25, 0.5, 1.0, 2.0]"
-  anchor_stride: 8
+  anchor_size: 72
+  anchor_scales: "[0.25, 0.5, 1.0, 2.0]"
+  anchor_aspect_ratios: "[0.33333, 0.25, 0.5, 1.0, 2.0, 3.0]"
+  anchor_stride: 16
   patch_gaussian_min_patch_size: 1
   patch_gaussian_max_patch_size: 1024
   patch_gaussian_max_stddev: 0.1
-  first_stage_nms_iou_threshold: 0.5
+  first_stage_nms_iou_threshold: 0.7
 

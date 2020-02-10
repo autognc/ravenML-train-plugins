@@ -46,7 +46,7 @@ class BoundingBoxModel:
                 if score >= vis_threshold:
                     visualization.draw_bounding_box_on_image_array(
                         image, bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax'],
-                        color='green', thickness=4, display_str_list=[f'{class_name}: {int(score * 100)}%'],
+                        color='green', thickness=1, display_str_list=[f'{class_name}: {int(score * 100)}%'],
                         use_normalized_coordinates=False
                     )
             return parsed, inference_time, image

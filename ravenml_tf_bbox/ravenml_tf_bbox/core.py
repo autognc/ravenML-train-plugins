@@ -189,8 +189,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
                         output, inference_time = model.run_inference_on_single_image(image)
                         evaluator.add_single_result(output, inference_time, bbox, centroid)
 
-            evaluator.calculate_default_and_save(output_path)
             evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
+            if comet:
+                experiment.log_asset('validation_results.pickle')
+            evaluator.calculate_default_and_save(output_path)
 
             extra_files.append(os.path.join(output_path, 'stats.json'))
             extra_files.append(os.path.join(output_path, 'validation_results.pickle'))

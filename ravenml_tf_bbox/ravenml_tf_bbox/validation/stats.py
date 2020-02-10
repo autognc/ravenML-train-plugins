@@ -15,6 +15,7 @@ class BoundingBoxEvaluator:
         :param category_index: A category_index from a BoundingBoxModel. Can be retrieved with model.category_index.
         """
         self.category_index = category_index
+        self.classes = [cls['name'] for cls in category_index.values()]
         self.count = 0
         self.times = []
         self.outputs = []
@@ -64,18 +65,18 @@ class BoundingBoxEvaluator:
         )
         """
         for i, (output_dict, bbox_dict) in enumerate(zip(self.outputs, self.bboxes)):
-            for class_id in self.category_index.keys():
-                class_name = self.category_index[class_id]['name']
+            for class_id, cls in self.category_index.items():
+                class_name = cls['name']
                 outputs = output_dict[class_name]  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)  # bbox for this class
 
                 # add ground truth for this class and this image to the evaluator
                 if bbox:
-                    boxes = [[bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax']]]
+                    boxes = np.array([[bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax']]], dtype=np.float32)
                 else:
-                    boxes = [[]]
+                    boxes = np.empty([0, 4], dtype=np.float32)
                 groundtruth_dict = {
-                    InputDataFields.groundtruth_boxes: np.array(boxes, dtype=np.float32),
+                    InputDataFields.groundtruth_boxes: boxes,
                     InputDataFields.groundtruth_classes: np.full(1, class_id, dtype=np.float32)
                 }
                 coco_evaluator.add_single_ground_truth_image_info(i, groundtruth_dict)
@@ -111,16 +112,15 @@ class BoundingBoxEvaluator:
         # in our single-instance detection scenario, we add a new entry into the matrix called 'misplaced_positive'
         # for situations where the groundtruth box exists and the top detection was over the confidence
         # threshold, but did not meet the IoU threshold.
-        confusion_matrix = {cls['name']: {
+        confusion_matrix = {cls: {
             'true_positive': 0,
             'false_positive': 0,
             'true_negative': 0,
             'false_negative': 0,
             'misplaced_positive': 0
-        } for cls in self.category_index.values()}
+        } for cls in self.classes}
         for output_dict, bbox_dict in zip(self.outputs, self.bboxes):
-            for class_id in self.category_index.keys():
-                class_name = self.category_index[class_id]['name']
+            for class_name in self.classes:
                 outputs = output_dict[class_name]  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)
 
@@ -139,15 +139,17 @@ class BoundingBoxEvaluator:
                         confusion_matrix[class_name]['false_negative'] += 1
                     else:
                         confusion_matrix[class_name]['true_negative'] += 1
+        for class_name in self.classes:
+            confusion_matrix[class_name]['precision'] = self._get_precision(confusion_matrix[class_name])
+            confusion_matrix[class_name]['recall'] = self._get_recall(confusion_matrix[class_name])
         if save:
-            self.stats[f'confusion_matrix@{confidence_threshold}c,{iou_threshold}IoU'] = confusion_matrix
+            self.stats[f'confusion_matrix@{confidence_threshold}c,{iou_threshold}iou'] = confusion_matrix
         return confusion_matrix
 
     def calculate_truth_bbox_to_truth_centroid_error(self, save=True):
-        distances = {cls['name']: [] for cls in self.category_index.values()}
+        distances = {cls: [] for cls in self.classes}
         for bbox_dict, centroid_dict in zip(self.bboxes, self.centroids):
-            for class_id in self.category_index.keys():
-                class_name = self.category_index[class_id]['name']
+            for class_name in self.classes:
                 bbox = bbox_dict.get(class_name)
                 centroid = centroid_dict.get(class_name)
                 if not (bbox and centroid):
@@ -161,13 +163,12 @@ class BoundingBoxEvaluator:
         return distances
 
     def calculate_distance_statistics(self, confidence_threshold, save=True):
-        stats = {cls['name']: {
+        stats = {cls: {
             'bbox_to_bbox': [],
             'bbox_to_centroid': []
-        } for cls in self.category_index.values()}
+        } for cls in self.classes}
         for output_dict, bbox_dict, centroid_dict in zip(self.outputs, self.bboxes, self.centroids):
-            for class_id in self.category_index.keys():
-                class_name = self.category_index[class_id]['name']
+            for class_name in self.classes:
                 outputs = output_dict[class_name]  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)
                 centroid = centroid_dict.get(class_name)
@@ -193,28 +194,28 @@ class BoundingBoxEvaluator:
 
     def plot_pr_curve(self, save_dir='.', iou_thresholds=(0.1, 0.25, 0.5, 0.75, 0.9)):
         plt.clf()
-        for class_id in self.category_index.keys():
-            class_name = self.category_index[class_id]['name']
+        for class_name in self.classes:
             fig, ax = plt.subplots()
             for iou_threshold in iou_thresholds:
                 precisions = []
                 recalls = []
                 for score in np.arange(0, 1.025, 0.025)[::-1]:
                     cf = self.calculate_confusion_matrix(score, iou_threshold, save=False)[class_name]
-                    recalls.append(self._get_recall(cf))
-                    precisions.append(self._get_precision(cf))
+                    recalls.append(cf['recall'])
+                    precisions.append(cf['precision'])
                 ax.scatter(np.array(recalls), np.array(precisions), 10, label=str(iou_threshold))
             ax.set_title(f'PR Curve for {class_name}')
             ax.set_xlabel('Recall')
             ax.set_ylabel('Precision')
             plt.legend(title="IOU Threshold", loc='upper left')
+            ax.set_ylim(0, 1)
+            ax.set_xlim(0, 1)
             plt.savefig(os.path.join(save_dir, f'pr_curve_{class_name}.png'))
             plt.clf()
 
     def plot_dr_curve(self, save_dir='.'):
         plt.clf()
-        for class_id in self.category_index.keys():
-            class_name = self.category_index[class_id]['name']
+        for class_name in self.classes:
             fig, ax = plt.subplots()
             recalls = []
             distances = []
@@ -232,9 +233,60 @@ class BoundingBoxEvaluator:
                 ax.scatter(np.array(recalls), np.array(distances[k]), 10, label=k)
             ax.set_title(f'DR Curve for {class_name}')
             ax.set_xlabel('Recall')
-            ax.set_ylabel('Distance')
+            ax.set_ylabel('Distance Error')
             plt.legend(title="Distance Type", loc='upper right')
+            ax.set_ylim(0, 1)
+            ax.set_xlim(0, 1)
             plt.savefig(os.path.join(save_dir, f'dr_curve_{class_name}.png'))
+            plt.clf()
+
+    def plot_dt_curve(self, save_dir='.'):
+        plt.clf()
+        for class_name in self.classes:
+            fig, ax = plt.subplots()
+            distances = []
+            scores = []
+            for output_dict, bbox_dict, centroid_dict in zip(self.outputs, self.bboxes, self.centroids):
+                outputs = output_dict[class_name]  # list of (score, bbox) for this class
+                bbox = bbox_dict.get(class_name)
+                centroid = centroid_dict.get(class_name)
+                if not (bbox and centroid):
+                    distances.append(None)
+                    scores.append(None)
+                    continue
+                distances.append(self._get_distance(self._get_centroid(outputs[0][1]), centroid))
+                scores.append(outputs[0][0])
+            ax.scatter(np.arange(len(distances)) + 1, distances, c=scores, cmap='viridis')
+            ax.set_title(f'Distance Error vs Time for {class_name}')
+            ax.set_xlabel('Image Number')
+            ax.set_ylabel('Distance Error (deg)')
+            ax.text(0.92, 0.9, 'Lighter = higher confidence', transform=ax.transAxes, horizontalalignment='right')
+            plt.savefig(os.path.join(save_dir, f'dt_curve_{class_name}.png'))
+            plt.clf()
+
+    def plot_it_curve(self, save_dir='.'):
+        plt.clf()
+        for class_name in self.classes:
+            fig, ax = plt.subplots()
+            distances = []
+            scores = []
+            for output_dict, bbox_dict, centroid_dict in zip(self.outputs, self.bboxes, self.centroids):
+                outputs = output_dict[class_name]  # list of (score, bbox) for this class
+                bbox = bbox_dict.get(class_name)
+                centroid = centroid_dict.get(class_name)
+                if not (bbox and centroid):
+                    distances.append(None)
+                    scores.append(None)
+                    continue
+                distances.append(self._get_iou(outputs[0][1], bbox))
+                scores.append(outputs[0][0])
+            ax.scatter(np.arange(len(distances)) + 1, distances, c=scores, cmap='viridis')
+            ax.set_title(f'IoU vs Time for {class_name}')
+            ax.set_xlabel('Image Number')
+            ax.set_ylabel('IoU')
+            ax.set_ylim(0, 1)
+            ax.text(0.92, 0.9, 'Lighter = higher confidence', transform=ax.transAxes, horizontalalignment='right')
+            plt.savefig(os.path.join(save_dir, f'it_curve_{class_name}.png'))
             plt.clf()
 
     def save_stats(self, path):
@@ -281,9 +333,22 @@ class BoundingBoxEvaluator:
         return (bbox['ymin'] + bbox['ymax']) / 2, (bbox['xmin'] + bbox['xmax']) / 2
 
     @classmethod
-    def _get_distance(cls, centroid_a, centroid_b):
+    def _get_distance(cls, centroid_a, centroid_b, deg_per_pixel=None):
+        """
+        If deg_per_pixel is not provided or None, returns the Euclidean pixel distance.
+        If deg_per_pixel is provided, it is used to convert the pixel coordinates to
+        azimuth and elevation, and then returns the great circle distance.
+        """
         ay, ax = centroid_a
         by, bx = centroid_b
+
+        if deg_per_pixel:
+            ap, al = ay * deg_per_pixel, ax * deg_per_pixel
+            bp, bl = by * deg_per_pixel, bx * deg_per_pixel
+            # Haversine formula for great circle distance
+            return 2 * np.arcsin(np.sqrt(
+                np.sin((ap - bp) / 2)**2 + np.cos(ap) * np.cos(bp) * np.sin((al - bl) / 2)**2)
+            )
         return np.sqrt((ay - by) ** 2 + (ax - bx) ** 2)
 
     def calculate_default_and_save(self, output_dir):
@@ -298,11 +363,13 @@ class BoundingBoxEvaluator:
         self.calculate_confusion_matrix(0.7, 0.1)
         self.calculate_confusion_matrix(0.7, 0.5)
 
-        self.calculate_distance_statistics(0.25)
+        self.calculate_distance_statistics(0.3)
         self.calculate_distance_statistics(0.5)
         self.calculate_distance_statistics(0.75)
 
         self.plot_pr_curve(output_dir)
         self.plot_dr_curve(output_dir)
+        self.plot_dt_curve(output_dir)
+        self.plot_it_curve(output_dir)
 
         self.save_stats(os.path.join(output_dir, 'stats.json'))
