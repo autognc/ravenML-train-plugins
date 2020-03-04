@@ -10,10 +10,20 @@ from object_detection.utils.object_detection_evaluation import ObjectDetectionEv
 
 class BoundingBoxEvaluator:
 
-    def __init__(self, category_index):
+    def __init__(self, category_index, fov=None, distance_unit=None):
         """
         :param category_index: A category_index from a BoundingBoxModel. Can be retrieved with model.category_index.
+        :param fov:  the FOV of the height or width axis of the camera used to take the images, in degrees. If this
+            is provided, then `image_size` must also be provided to each call to `add_single_result` where `image_size`
+            is the image resolution along the same dimension as `fov`. If these conditions are met, all distance
+            statistics will also be computed in degrees. (optional)
+        :param distance_unit: A string indicating what length unit `distance` will be in `add_single_result`
+            (e.g. 'meters'). If this is provided, then `fov` must also be provided, and `distance`
+            must be provided to every call to `add_single_result`. If these
+            conditions are met, then all distance statistics will also be computed in these units.
         """
+        if distance_unit and not fov:
+            raise ValueError("distance_unit provided without fov.")
         self.category_index = category_index
         self.classes = [cls['name'] for cls in category_index.values()]
         self.count = 0
@@ -21,6 +31,12 @@ class BoundingBoxEvaluator:
         self.outputs = []
         self.bboxes = []
         self.centroids = []
+        self.fov = fov
+        self.distance_unit = distance_unit
+        if fov:
+            self.sizes = []
+            if distance_unit:
+                self.distances = []
         self.stats = {}
 
     @classmethod
@@ -37,14 +53,34 @@ class BoundingBoxEvaluator:
         self.stats = {}
         return self
 
-    def add_single_result(self, output, inference_time, bbox, centroid):
+    def add_single_result(self, output, inference_time, bbox, centroid, image_size=None, distance=None):
         """
         Add single inference result to the evaluation.
         :param output: the parsed output from a BoundingBoxModel inference.
         :param inference_time: the inference time from a BoundingBoxModel inference.
-        :param bbox: a dict with keys 'xmin', 'xmax', 'ymin', and 'ymax' in non-normalized (pixel) coordinates.
-        :param centroid: (y, x) in non-normalized (pixel) coordinates.
+        :param bbox: a dict {classname: bbox} where bbox has keys keys 'xmin', 'xmax', 'ymin',
+            and 'ymax' in non-normalized (pixel) coordinates.
+        :param centroid: a dict {classname: centroid} where classname is a tuple (y, x) in
+            non-normalized (pixel) coordinates.
+        :param image_size: the size of the image, in pixels, along the same dimension as the specified FOV in __init__.
+        :param distance: a dict {classname: distance} where distance is the distance from the object
+            to the camera in `distance_unit`.
         """
+        if image_size:
+            if self.fov:
+                self.sizes.append(image_size)
+            else:
+                raise ValueError("image_size provided without fov in __init__")
+        elif self.fov:
+            raise ValueError("image_size not provided when fov was provided in __init__")
+        if distance:
+            if self.distance_unit:
+                self.distances.append(distance)
+            else:
+                raise ValueError("distance provided without distance_unit in __init__")
+        elif self.distance_unit:
+            raise ValueError("distance not provided when distance_unit was provided in __init__")
+
         print(f'Image {self.count}, time: {inference_time}')
         self.outputs.append(output)
         self.times.append(inference_time)
@@ -147,16 +183,27 @@ class BoundingBoxEvaluator:
         return confusion_matrix
 
     def calculate_truth_bbox_to_truth_centroid_error(self, save=True):
-        distances = {cls: [] for cls in self.classes}
-        for bbox_dict, centroid_dict in zip(self.bboxes, self.centroids):
+        distances = {cls: {
+            key: [] for key in self._gen_distance_keys(['error'])
+        } for cls in self.classes}
+        for i in range(len(self.bboxes)):
             for class_name in self.classes:
-                bbox = bbox_dict.get(class_name)
-                centroid = centroid_dict.get(class_name)
+                bbox = self.bboxes[i].get(class_name)
+                centroid = self.centroids[i].get(class_name)
                 if not (bbox and centroid):
                     continue
-                distances[class_name].append(self._get_distance(self._get_centroid(bbox), centroid))
-        for k, v in distances.items():
-            distances[k] = np.mean(np.array(distances[k]))
+                distances[class_name]['error_px'].append(self._get_distance(self._get_centroid(bbox), centroid))
+                if self.fov:
+                    distances[class_name]['error_deg'].append(
+                        self._get_distance(self._get_centroid(bbox), centroid, self.fov / self.sizes[i])
+                    )
+                    if self.distance_unit:
+                        distances[class_name][f'error_{self.distance_unit}'].append(
+                            self._chord_length(distances[class_name]['error_deg'][-1], self.distances[i])
+                        )
+        for class_name, values in distances.items():
+            for key, value in values.items():
+                distances[class_name][key] = np.mean(np.array(value))
 
         if save:
             self.stats['avg_truth_bbox_to_truth_centroid_error'] = distances
@@ -164,24 +211,38 @@ class BoundingBoxEvaluator:
 
     def calculate_distance_statistics(self, confidence_threshold, save=True):
         stats = {cls: {
-            'bbox_to_bbox': [],
-            'bbox_to_centroid': []
+            key: [] for key in self._gen_distance_keys(['bbox_to_bbox', 'bbox_to_centroid'])
         } for cls in self.classes}
-        for output_dict, bbox_dict, centroid_dict in zip(self.outputs, self.bboxes, self.centroids):
+        for i in range(len(self.bboxes)):
             for class_name in self.classes:
-                outputs = output_dict[class_name]  # list of (score, bbox) for this class
-                bbox = bbox_dict.get(class_name)
-                centroid = centroid_dict.get(class_name)
+                outputs = self.outputs[i][class_name]  # list of (score, bbox) for this class
+                bbox = self.bboxes[i].get(class_name)
+                centroid = self.centroids[i].get(class_name)
                 # this will only consider true positives
                 if not (bbox and centroid and outputs[0][0] >= confidence_threshold):
                     continue
 
-                stats[class_name]['bbox_to_bbox'].append(
+                stats[class_name]['bbox_to_bbox_px'].append(
                     self._get_distance(self._get_centroid(outputs[0][1]), self._get_centroid(bbox))
                 )
-                stats[class_name]['bbox_to_centroid'].append(
+                stats[class_name]['bbox_to_centroid_px'].append(
                     self._get_distance(self._get_centroid(outputs[0][1]), centroid)
                 )
+                if self.fov:
+                    deg_per_px = self.fov / self.sizes[i]
+                    stats[class_name]['bbox_to_bbox_deg'].append(
+                        self._get_distance(self._get_centroid(outputs[0][1]), self._get_centroid(bbox), deg_per_px)
+                    )
+                    stats[class_name]['bbox_to_centroid_deg'].append(
+                        self._get_distance(self._get_centroid(outputs[0][1]), centroid, deg_per_px)
+                    )
+                    if self.distance_unit:
+                        stats[class_name][f'bbox_to_bbox_{self.distance_unit}'].append(
+                            self._chord_length(stats[class_name]['bbox_to_bbox_deg'][-1], self.distances[i])
+                        )
+                        stats[class_name][f'bbox_to_centroid_{self.distance_unit}'].append(
+                            self._chord_length(stats[class_name]['bbox_to_centroid_deg'][-1], self.distances[i])
+                        )
 
         # average everything
         for class_name, values in stats.items():
@@ -213,7 +274,14 @@ class BoundingBoxEvaluator:
             plt.savefig(os.path.join(save_dir, f'pr_curve_{class_name}.png'))
             plt.clf()
 
-    def plot_dr_curve(self, save_dir='.'):
+    def plot_dr_curve(self, save_dir='.', mode='px'):
+        if mode not in ['px', 'deg', 'distance']:
+            raise ValueError(f'mode {mode} not recognized')
+        if mode == 'deg' and not self.fov:
+            return
+        if mode == 'distance' and not (self.fov and self.distance_unit):
+            return
+        unit = self.distance_unit if mode == 'distance' else mode
         plt.clf()
         for class_name in self.classes:
             fig, ax = plt.subplots()
@@ -228,40 +296,57 @@ class BoundingBoxEvaluator:
                 distances.append(
                     self.calculate_distance_statistics(score, save=False)[class_name]
                 )
-            distances = {k: [d[k] for d in distances] for k in distances[0].keys()}
+            distances = {k: [d[k] for d in distances] for k in distances[0].keys() if unit in k}
             for k, v in distances.items():
-                ax.scatter(np.array(recalls), np.array(distances[k]), 10, label=k)
-            ax.set_title(f'DR Curve for {class_name}')
+                ax.scatter(np.array(recalls), np.array(distances[k]), 10, label='_'.join(k.split('_')[:-1]))
+            ax.set_title(f'Distance-Recall Curve ({unit}) for {class_name}')
             ax.set_xlabel('Recall')
-            ax.set_ylabel('Distance Error')
+            ax.set_ylabel(f'Distance Error ({unit})')
             plt.legend(title="Distance Type", loc='upper right')
-            ax.set_ylim(0, 1)
             ax.set_xlim(0, 1)
-            plt.savefig(os.path.join(save_dir, f'dr_curve_{class_name}.png'))
+            plt.savefig(os.path.join(save_dir, f'dr_{unit}_curve_{class_name}.png'))
             plt.clf()
 
-    def plot_dt_curve(self, save_dir='.'):
+    def plot_dt_curve(self, save_dir='.', mode='px'):
+        if mode not in ['px', 'deg', 'distance']:
+            raise ValueError(f'mode {mode} not recognized')
+        if mode == 'deg' and not self.fov:
+            return
+        if mode == 'distance' and not (self.fov and self.distance_unit):
+            return
+        unit = self.distance_unit if mode == 'distance' else mode
         plt.clf()
         for class_name in self.classes:
             fig, ax = plt.subplots()
             distances = []
             scores = []
-            for output_dict, bbox_dict, centroid_dict in zip(self.outputs, self.bboxes, self.centroids):
-                outputs = output_dict[class_name]  # list of (score, bbox) for this class
-                bbox = bbox_dict.get(class_name)
-                centroid = centroid_dict.get(class_name)
+            for i in range(len(self.bboxes)):
+                outputs = self.outputs[i][class_name]  # list of (score, bbox) for this class
+                bbox = self.bboxes[i].get(class_name)
+                centroid = self.centroids[i].get(class_name)
                 if not (bbox and centroid):
                     distances.append(None)
                     scores.append(None)
                     continue
-                distances.append(self._get_distance(self._get_centroid(outputs[0][1]), centroid))
                 scores.append(outputs[0][0])
+                if mode == 'px':
+                    distances.append(self._get_distance(self._get_centroid(outputs[0][1]), centroid))
+                    continue
+                angle = self._get_distance(self._get_centroid(outputs[0][1]), centroid, self.fov / self.sizes[i])
+                if mode == 'deg':
+                    distances.append(angle)
+                elif mode == 'distance':
+                    distances.append(self._chord_length(angle, self.distances[i]))
             ax.scatter(np.arange(len(distances)) + 1, distances, c=scores, cmap='viridis')
-            ax.set_title(f'Distance Error vs Time for {class_name}')
+            ax.set_title(f'Distance Error (CoB-to-CoM, {unit}) vs Time for {class_name}')
             ax.set_xlabel('Image Number')
-            ax.set_ylabel('Distance Error (deg)')
+            if mode == 'distance':
+                ax.set_ylim(0, 60)
+            elif mode == 'deg':
+                ax.set_ylim(0, 0.45)
+            ax.set_ylabel(f'Distance Error ({unit})')
             ax.text(0.92, 0.9, 'Lighter = higher confidence', transform=ax.transAxes, horizontalalignment='right')
-            plt.savefig(os.path.join(save_dir, f'dt_curve_{class_name}.png'))
+            plt.savefig(os.path.join(save_dir, f'dt_{unit}_curve_{class_name}.png'))
             plt.clf()
 
     def plot_it_curve(self, save_dir='.'):
@@ -299,6 +384,14 @@ class BoundingBoxEvaluator:
         results = {k: v for k, v in vars(self).items() if k != 'stats'}
         with open(path, 'wb') as f:
             pickle.dump(results, f)
+
+    def _gen_distance_keys(self, prefixes):
+        keys = [prefix + '_px' for prefix in prefixes]
+        if self.fov:
+            keys += [prefix + '_deg' for prefix in prefixes]
+        if self.distance_unit:
+            keys += [prefix + '_' + self.distance_unit for prefix in prefixes]
+        return keys
 
     @classmethod
     def _get_area(cls, a):
@@ -343,13 +436,18 @@ class BoundingBoxEvaluator:
         by, bx = centroid_b
 
         if deg_per_pixel:
-            ap, al = ay * deg_per_pixel, ax * deg_per_pixel
-            bp, bl = by * deg_per_pixel, bx * deg_per_pixel
+            rad_per_pixel = deg_per_pixel * np.pi / 180
+            ap, al = ay * rad_per_pixel, ax * rad_per_pixel
+            bp, bl = by * rad_per_pixel, bx * rad_per_pixel
             # Haversine formula for great circle distance
             return 2 * np.arcsin(np.sqrt(
                 np.sin((ap - bp) / 2)**2 + np.cos(ap) * np.cos(bp) * np.sin((al - bl) / 2)**2)
-            )
+            ) * 180 / np.pi
         return np.sqrt((ay - by) ** 2 + (ax - bx) ** 2)
+
+    @classmethod
+    def _chord_length(cls, angle, obj_distance):
+        return 2 * obj_distance * np.sin(angle * np.pi / 180 / 2)
 
     def calculate_default_and_save(self, output_dir):
         """Convenient method to calculate a bunch of default statistics and save them"""
@@ -368,8 +466,10 @@ class BoundingBoxEvaluator:
         self.calculate_distance_statistics(0.75)
 
         self.plot_pr_curve(output_dir)
-        self.plot_dr_curve(output_dir)
-        self.plot_dt_curve(output_dir)
+        self.plot_dr_curve(output_dir, mode='deg')
+        self.plot_dr_curve(output_dir, mode='distance')
+        self.plot_dt_curve(output_dir, mode='deg')
+        self.plot_dt_curve(output_dir, mode='distance')
         self.plot_it_curve(output_dir)
 
         self.save_stats(os.path.join(output_dir, 'stats.json'))

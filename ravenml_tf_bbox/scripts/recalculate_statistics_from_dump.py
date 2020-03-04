@@ -10,6 +10,7 @@ def main():
 
     evaluator = BoundingBoxEvaluator.load_from_dump(args.dump_path)
     evaluator.calculate_default_and_save(args.output_path)
+    evaluator.dump(args.output_path + '/results.pickle')
 
 
 if __name__ == '__main__':

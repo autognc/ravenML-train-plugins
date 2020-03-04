@@ -32,11 +32,11 @@ def main():
         truth_data = truth_data[:args.num]
 
     model = BoundingBoxModel(args.model, args.labelmap)
-    evaluator = BoundingBoxEvaluator(model.category_index)
+    evaluator = BoundingBoxEvaluator(model.category_index, fov=39.59775533586952, distance_unit='meters')
     image_tensor = image_dataset.make_one_shot_iterator().get_next()
     with tf.Session() as sess:
         with model.start_session():
-            for i, (bbox, centroid) in enumerate(truth_data):
+            for i, (bbox, centroid, distance) in enumerate(truth_data):
                 image = sess.run(image_tensor)
                 if args.vis:
                     output, inference_time, vis_img =\
@@ -44,7 +44,10 @@ def main():
                     cv2.imwrite(os.path.join(args.output, f'{str(i).zfill(5)}.png'), vis_img)
                 else:
                     output, inference_time = model.run_inference_on_single_image(image)
-                evaluator.add_single_result(output, inference_time, bbox, centroid)
+                evaluator.add_single_result(
+                    output, inference_time, bbox, centroid,
+                    image_size=image.shape[1], distance=distance / 17
+                )
 
     evaluator.dump(os.path.join(args.output, 'results.pickle'))
     evaluator.calculate_default_and_save(args.output)
