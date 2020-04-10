@@ -199,10 +199,10 @@ class PoseRegressionModel:
     def pose_loss(y_true, y_pred):
         flipped_true = PoseRegressionModel.flip_barrel(y_true)
 
-        dot_a = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1)
-        dot_b = tf.reduce_sum(tf.multiply(flipped_true, y_pred), axis=-1)
-        loss_a = 2 * tf.acos(tf.clip_by_value(dot_a, -1, 1))
-        loss_b = 2 * tf.acos(tf.clip_by_value(dot_b, -1, 1))
+        dot_a = tf.abs(tf.reduce_sum(tf.multiply(y_true, y_pred), axis=-1))
+        dot_b = tf.abs(tf.reduce_sum(tf.multiply(flipped_true, y_pred), axis=-1))
+        loss_a = 2 * tf.acos(tf.clip_by_value(dot_a, 0, 1))
+        loss_b = 2 * tf.acos(tf.clip_by_value(dot_b, 0, 1))
         return tf.minimum(loss_a, loss_b)
 
     @staticmethod
@@ -239,6 +239,10 @@ class PoseRegressionModel:
         image = tf.io.decode_image(image_data, channels=3)
         # this rescales inputs to the range [-1, 1], which should be what the model expects
         image = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(image, tf.float32))
+
+        # ensure types
+        bbox_size = tf.cast(bbox_size, tf.float32)
+        centroid = tf.cast(centroid, tf.float32)
 
         # convert to [0, 1] relative coordinates
         imdims = tf.cast(tf.shape(image)[:2] - 1, tf.float32)

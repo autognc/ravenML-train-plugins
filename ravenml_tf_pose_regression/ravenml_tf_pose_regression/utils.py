@@ -27,22 +27,20 @@ def dataset_from_directory(dir_path, cropsize):
     def generator():
         image_files = sorted(glob.glob(os.path.join(dir_path, "image_*")))
         meta_files = sorted(glob.glob(os.path.join(dir_path, "meta_*.json")))
-        bbox_files = sorted(glob.glob(os.path.join(dir_path, "bboxLabels_*.xml")))
-        for image_file, meta_file, bbox_file in zip(image_files, meta_files, bbox_files):
+        for image_file, meta_file in zip(image_files, meta_files):
             # load metadata
             with open(meta_file, "r") as f:
                 metadata = json.load(f)
             metadata = recursive_map_dict(metadata, tf.convert_to_tensor)
 
             # load bounding box
-            tree = ET.parse(bbox_file)
-            bndbox = tree.getroot().find('object').find('bndbox')
-            xmin = int(bndbox.find("xmin").text)
-            xmax = int(bndbox.find("xmax").text)
-            ymin = int(bndbox.find("ymin").text)
-            ymax = int(bndbox.find("ymax").text)
-            centroid = tf.convert_to_tensor([(ymax + ymin) / 2, (xmax + xmin) / 2])
-            bbox_size = max(xmax - xmin, ymax - ymin)
+            bbox = metadata['bboxes']['cygnus']
+            xmin = bbox['xmin']
+            xmax = bbox['xmax']
+            ymin = bbox['ymin']
+            ymax = bbox['ymax']
+            centroid = tf.convert_to_tensor([(ymax + ymin) / 2, (xmax + xmin) / 2], dtype=tf.float32)
+            bbox_size = tf.cast(tf.maximum(xmax - xmin, ymax - ymin), tf.float32)
 
             # load and crop image
             image_data = tf.io.read_file(image_file)

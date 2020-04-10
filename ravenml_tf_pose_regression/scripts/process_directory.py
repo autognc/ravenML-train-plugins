@@ -40,7 +40,8 @@ def main():
         result.update({
             'detected_pose': make_serializable(detected_pose),
             'time': time_elapsed,
-            'pose_error': make_serializable(PoseRegressionModel.pose_loss(metadata['pose'], detected_pose))
+            'pose_error': make_serializable(PoseRegressionModel.pose_loss(metadata['pose'], detected_pose)),
+            'centroid': make_serializable(list(metadata['centroids'].values())[0])
         })
         results.append(result)
 
