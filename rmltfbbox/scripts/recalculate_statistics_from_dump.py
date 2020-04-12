@@ -1,4 +1,4 @@
-from ravenml_tf_bbox.validation.stats import BoundingBoxEvaluator
+from rmltfbbox.validation.stats import BoundingBoxEvaluator
 import argparse
 
 

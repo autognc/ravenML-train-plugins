@@ -3,9 +3,9 @@ import argparse
 import sys
 import os
 import cv2
-import ravenml_tf_bbox.validation.utils as utils
-from ravenml_tf_bbox.validation.model import BoundingBoxModel
-from ravenml_tf_bbox.validation.stats import BoundingBoxEvaluator
+import rmltfbbox.validation.utils as utils
+from rmltfbbox.validation.model import BoundingBoxModel
+from rmltfbbox.validation.stats import BoundingBoxEvaluator
 import object_detection.utils.visualization_utils as visualization
 
 

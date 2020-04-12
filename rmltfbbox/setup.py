@@ -5,12 +5,12 @@ from setuptools import setup
 #         return f.read().splitlines()
 
 setup(
-    name='ravenML_tf_bbox',
+    name='rmltfbbox',
     version='0.3',
     description='Training plugin for ravenml',
-    packages=['ravenml_tf_bbox'],
+    packages=['rmltfbbox'],
     entry_points='''
         [ravenml.plugins.train]
-        tf_bbox=ravenml_tf_bbox.core:tf_bbox
+        tf_bbox=rmltfbbox.core:tf_bbox
     '''
 )
