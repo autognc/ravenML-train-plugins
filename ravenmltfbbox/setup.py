@@ -8,10 +8,10 @@ from setuptools import setup
 # https://stackoverflow.com/questions/12518499/pip-ignores-dependency-links-in-setup-py
 
 setup(
-    name='rmltfbbox',
+    name='ravenmltfbbox',
     version='0.3',
     description='Training plugin for ravenml',
-    packages=['rmltfbbox'],
+    packages=['ravenmltfbbox'],
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
@@ -29,6 +29,6 @@ setup(
     ],
     entry_points='''
         [ravenml.plugins.train]
-        tf_bbox=rmltfbbox.core:tf_bbox
+        tf_bbox=ravenmltfbbox.core:tf_bbox
     '''
 )

@@ -3,9 +3,9 @@ import argparse
 import sys
 import os
 import cv2
-import rmltfbbox.validation.utils as utils
-from rmltfbbox.validation.model import BoundingBoxModel
-from rmltfbbox.validation.stats import BoundingBoxEvaluator
+import ravenmltfbbox.validation.utils as utils
+from ravenmltfbbox.validation.model import BoundingBoxModel
+from ravenmltfbbox.validation.stats import BoundingBoxEvaluator
 import object_detection.utils.visualization_utils as visualization
 
 
