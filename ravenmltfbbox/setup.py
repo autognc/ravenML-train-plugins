@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 # def dependencies(file):
 #     with open(file) as f:
@@ -11,7 +11,7 @@ setup(
     name='ravenmltfbbox',
     version='0.3',
     description='Training plugin for ravenml',
-    packages=['ravenmltfbbox'],
+    packages=find_packages(),
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
