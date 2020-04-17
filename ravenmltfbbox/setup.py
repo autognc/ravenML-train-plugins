@@ -7,6 +7,9 @@ from setuptools import setup, find_packages
 # figured out how to add object-detection via:
 # https://stackoverflow.com/questions/12518499/pip-ignores-dependency-links-in-setup-py
 
+# figured out to use find_packages() via:
+# https://stackoverflow.com/questions/10924885/is-it-possible-to-include-subdirectories-using-dist-utils-setup-py-as-part-of
+
 setup(
     name='ravenmltfbbox',
     version='0.3',
