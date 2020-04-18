@@ -1,4 +1,7 @@
+import os
 from setuptools import setup, find_packages
+from setuptools.command.install import install
+from setuptools.command.develop import develop
 
 # def dependencies(file):
 #     with open(file) as f:
@@ -10,6 +13,10 @@ from setuptools import setup, find_packages
 # figured out to use find_packages() via:
 # https://stackoverflow.com/questions/10924885/is-it-possible-to-include-subdirectories-using-dist-utils-setup-py-as-part-of
 
+# determine GPU or CPU install via env variable
+gpu = os.getenv('RML_BBOX_GPU')
+tensorflow_pkg = 'tensorflow==1.14.0' if not gpu else 'tensorflow-gpu==1.14.0'
+
 setup(
     name='ravenmltfbbox',
     version='0.3',
@@ -18,7 +25,6 @@ setup(
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
-        'tensorflow==1.14.0',
         'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection#egg=object-detection',
         'absl-py==0.8.0',
         'pycocotools-fix==2.0.0.1',
@@ -28,7 +34,8 @@ setup(
         'lxml==4.4.0',
         'jupyter==1.0.0',
         'comet-ml==2.0.13',
-        'opencv-python==4.1.2.30'        
+        'opencv-python==4.1.2.30',
+        tensorflow_pkg
     ],
     entry_points='''
         [ravenml.plugins.train]
