@@ -22,7 +22,8 @@ init()
 # local cache for the tf_bbox plugin (within ravenML cache)
 bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
 
-def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict):
+def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict,
+                         overwrite_local = False, optimizer = None, use_default_config = False):
     """ Prepares the system for training.
 
     Creates artifact directory structure. Prompts user for choice of optimizer and
@@ -44,7 +45,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     
     # check if base_dir exists already and prompt before overwriting
     if os.path.exists(base_dir):
-        if user_confirms('Artifact storage location contains old data. Overwrite?'):
+        if overwrite_local or user_confirms('Artifact storage location contains old data. Overwrite?'):
             shutil.rmtree(base_dir)
         else:
             return False
@@ -91,14 +92,17 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         except yaml.YAMLError as exc:
             print(exc)
 
-    optimizer_name = user_selects('Choose optimizer', defaults.keys())
+    optimizer_name = optimizer if optimizer else user_selects('Choose optimizer', defaults.keys())
     hp_metadata['optimizer'] = optimizer_name
     
     ### PIPELINE CONFIG CREATION ###
     # grab default config for the chosen optimizer
-    default_config = defaults[optimizer_name]
+    try:
+        default_config = defaults[optimizer_name]
+    except KeyError as e:
+        raise click.exceptions.BadParameter(optimizer, param=optimizer_name, param_hint='name of optimizer')
     # prompt user for new configuration
-    user_config = _configuration_prompt(default_config)
+    user_config = default_config if use_default_config else _configuration_prompt(default_config)
     # add to hyperparameter metadata dict
     for field, value in user_config.items():
         hp_metadata[field] = value
