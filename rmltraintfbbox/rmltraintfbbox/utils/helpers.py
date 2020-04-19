@@ -23,7 +23,7 @@ init()
 bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict,
-                         overwrite_local = False, optimizer = None, use_default_config = False):
+                         overwrite_local = False, optimizer = None, use_default_config = False, config = None):
     """ Prepares the system for training.
 
     Creates artifact directory structure. Prompts user for choice of optimizer and
@@ -102,7 +102,10 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     except KeyError as e:
         raise click.exceptions.BadParameter(optimizer, param=optimizer_name, param_hint='name of optimizer')
     # prompt user for new configuration
-    user_config = default_config if use_default_config else _configuration_prompt(default_config)
+    if use_default_config:
+        user_config = default_config 
+    else:
+         user_config = _no_user_config(default_config,config.strip().split(",")) if config else _configuration_prompt(default_config)
     # add to hyperparameter metadata dict
     for field, value in user_config.items():
         hp_metadata[field] = value
@@ -245,3 +248,20 @@ def _print_config(config: dict):
     click.echo('Current configuration:')
     for field, value in config.items():
         click.echo(Fore.GREEN + f'{field}: ' + Fore.WHITE + f'{value}')
+
+def _no_user_config(current_config: dict, config: list):
+    """Edits current training configuration based off parameters specified.
+
+    Args:
+        current_config (dict): current training configuration
+        config (list): specified training configuration
+        
+    Returns:
+        dict: updated training configuration
+    """
+    try:
+        for index, field in enumerate(current_config):
+            current_config[field] = config[index]
+    except IndexError as e:
+        raise click.exceptions.BadParameter(config, param=config, param_hint='training configuration')
+    return current_config
