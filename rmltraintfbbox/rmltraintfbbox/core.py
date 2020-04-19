@@ -45,6 +45,43 @@ comet_opt = click.option(
     help='Enable comet on this training run.'
 )
 
+# Could possibly go into a different file accesible 
+# by more plugins
+name_opt = click.option(
+    '-n', '--name', type=str, 
+    help='First and Last name of user.'
+)
+
+comments_opt = click.option(
+    '--comments', type=str, 
+    help='Comments about the training.'    
+)
+
+model_opt = click.option(
+    '--model-name', '-m', type=str,
+    help='Name of model to be used for training.'
+)
+
+overwrite_local_opt = click.option(
+    '--overwrite-local', '-o', is_flag=True,
+    help='Overwrite files that may be in path specified.'
+)
+
+optimizer_opt = click.option(
+    '--optimizer', type=str,
+    help='Optimizer for training.'
+)
+
+use_default_config_opt = click.option(
+    '-d', '--use-default-config', is_flag=True,
+    help='Use default configuration for training'
+)
+
+# config_opt = click.option(
+#     '--config', multiple=True, type=str
+#     help='List of specified configuration'
+# )
+
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
@@ -55,10 +92,18 @@ def tf_bbox(ctx):
 @tf_bbox.command(help='Train a model.')
 @verbose_opt
 @comet_opt
+@name_opt
+@comments_opt
+@model_opt
+@overwrite_local_opt
+@optimizer_opt
+@use_default_config_opt
+# @config_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, comet: bool):
+def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comments: str,
+          model_name: str, overwrite_local: bool, optimizer: str, use_default_config: bool):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -74,7 +119,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     
     # create training metadata dict and populate with basic information
     metadata = {}
-    fill_basic_metadata(metadata, train.dataset)
+    fill_basic_metadata(metadata, train.dataset, name, comments)
 
     # set base directory for model artifacts 
     base_dir = bbox_cache.path / 'temp' if train.artifact_path is None \
@@ -90,9 +135,12 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             print(exc)
     
     # prompt for model selection
-    model_name = user_selects('Choose model', models.keys())
+    model_name = model_name if model_name else user_selects('Choose model', models.keys())
     # grab fields and add to metadata
-    model = models[model_name]
+    try:
+        model = models[model_name]
+    except KeyError as e:
+        raise click.exceptions.BadParameter(model_name, ctx=ctx, param=model_name, param_hint='model name')
     model_type = model['type']
     model_url = model['url']
     metadata['architecture'] = model_name
@@ -101,7 +149,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     arch_path = download_model_arch(model_url)
 
     # prepare directory for training/prompt for hyperparams
-    if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
+    if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata, 
+                                overwrite_local, optimizer, use_default_config):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
