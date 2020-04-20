@@ -23,7 +23,7 @@ init()
 bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict,
-                         overwrite_local = False, optimizer = None, use_default_config = False, config = None):
+                         overwrite_local = False, optimizer = None, use_default_config = False, hyperparameters = None):
     """ Prepares the system for training.
 
     Creates artifact directory structure. Prompts user for choice of optimizer and
@@ -105,7 +105,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     if use_default_config:
         user_config = default_config 
     else:
-         user_config = _no_user_config(default_config,config.strip().split(",")) if config else _configuration_prompt(default_config)
+         user_config = _no_user_config(default_config,hyperparameters.strip().split(",")) if hyperparameters else _configuration_prompt(default_config)
     # add to hyperparameter metadata dict
     for field, value in user_config.items():
         hp_metadata[field] = value
@@ -249,7 +249,7 @@ def _print_config(config: dict):
     for field, value in config.items():
         click.echo(Fore.GREEN + f'{field}: ' + Fore.WHITE + f'{value}')
 
-def _no_user_config(current_config: dict, config: list):
+def _no_user_config(current_config: dict, hyperparameters: list):
     """Edits current training configuration based off parameters specified.
 
     Args:
@@ -260,8 +260,9 @@ def _no_user_config(current_config: dict, config: list):
         dict: updated training configuration
     """
     try:
-        for index, field in enumerate(current_config):
-            current_config[field] = config[index]
+        for parameter in hyperparameters:
+            param = parameter.split("=")
+            current_config[param[0]] = param[1]
     except IndexError as e:
-        raise click.exceptions.BadParameter(config, param=config, param_hint='training configuration')
+        raise click.exceptions.BadParameter(hyperparameters, param=hyperparameters, param_hint='training configuration')
     return current_config
