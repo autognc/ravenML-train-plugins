@@ -77,8 +77,8 @@ use_default_config_opt = click.option(
     help='Use default configuration for training'
 )
 
-config_opt = click.option(
-    '--config', type=str,
+hyperparameters_opt = click.option(
+    '--hyperparameters', type=str,
     help='List of specified configurations for training'
 )
 
@@ -97,13 +97,13 @@ def tf_bbox(ctx):
 @overwrite_local_opt
 @optimizer_opt
 @use_default_config_opt
-@config_opt
+@hyperparameters_opt
 # @kfold_opt
 @pass_train
 @click.pass_context
 def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comments: str,
           model_name: str, overwrite_local: bool, optimizer: str, use_default_config: bool,
-          config: str):
+          hyperparameters: str):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -150,7 +150,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comment
 
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata, 
-                                overwrite_local, optimizer, use_default_config, config):
+                                overwrite_local, optimizer, use_default_config, hyperparameters):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
