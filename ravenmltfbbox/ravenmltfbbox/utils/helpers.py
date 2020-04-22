@@ -254,15 +254,14 @@ def _no_user_config(current_config: dict, hyperparameters: list):
 
     Args:
         current_config (dict): current training configuration
-        config (list): specified training configuration
+        hyperparameters (list): specified training configuration
         
     Returns:
         dict: updated training configuration
     """
-    try:
-        for parameter in hyperparameters:
-            param = parameter.split("=")
-            current_config[param[0]] = param[1]
-    except IndexError as e:
-        raise click.exceptions.BadParameter(hyperparameters, param=hyperparameters, param_hint='training configuration')
+    for parameter in hyperparameters:
+        param = parameter.strip().split("=")
+        if(param[0] not in current_config):
+            raise click.exceptions.BadParameter(param[0], param=hyperparameters, param_hint='training configuration')
+        current_config[param[0]] = param[1]
     return current_config
