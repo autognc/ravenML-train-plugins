@@ -15,7 +15,7 @@ from .train import PoseRegressionModel
 from . import utils
 
 
-@click.group(help='TensorFlow Feature Point Regression.')
+@click.group(help='TensorFlow Direct Pose Regression.')
 def tf_pose_regression():
     pass
 

@@ -6,8 +6,8 @@ import tensorflow as tf
 import time
 import argparse
 import json
-from ravenml_tf_pose_regression.utils import dataset_from_directory, recursive_map_dict
-from ravenml_tf_pose_regression.train import PoseRegressionModel
+from rmltraintfposeregression.utils import dataset_from_directory, recursive_map_dict
+from rmltraintfposeregression.train import PoseRegressionModel
 
 
 def main():
