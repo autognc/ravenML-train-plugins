@@ -4,9 +4,9 @@ import sys
 import os
 import time
 import cv2
-import ravenmltfbbox.validation.utils as utils
-from ravenmltfbbox.validation.model import BoundingBoxModel
-from ravenmltfbbox.validation.stats import BoundingBoxEvaluator
+import rmltraintfbbox.validation.utils as utils
+from rmltraintfbbox.validation.model import BoundingBoxModel
+from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 from object_detection.protos import pipeline_pb2
 from object_detection.exporter import build_detection_graph

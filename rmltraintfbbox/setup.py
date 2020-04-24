@@ -12,13 +12,13 @@ from setuptools import setup, find_packages
 # https://stackoverflow.com/questions/10924885/is-it-possible-to-include-subdirectories-using-dist-utils-setup-py-as-part-of
 
 # determine GPU or CPU install via env variable
-gpu = os.getenv('RML_BBOX_GPU')
+gpu = os.getenv('RMLTRAIN_BBOX_GPU')
 tensorflow_pkg = 'tensorflow==1.14.0' if not gpu else 'tensorflow-gpu==1.14.0'
 
 setup(
-    name='ravenmltfbbox',
+    name='rmltraintfbbox',
     version='0.3',
-    description='Training plugin for ravenml',
+    description='Tensorflow Bounding Box training plugin for ravenml',
     packages=find_packages(),
     install_requires=[
         'numpy==1.16.4',
@@ -37,6 +37,6 @@ setup(
     ],
     entry_points='''
         [ravenml.plugins.train]
-        tf_bbox=ravenmltfbbox.core:tf_bbox
+        tf_bbox=rmltraintfbbox.core:tf_bbox
     '''
 )

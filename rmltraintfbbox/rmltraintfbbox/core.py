@@ -27,10 +27,10 @@ from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
-from ravenmltfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
-import ravenmltfbbox.validation.utils as utils
-from ravenmltfbbox.validation.model import BoundingBoxModel
-from ravenmltfbbox.validation.stats import BoundingBoxEvaluator
+from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
+import rmltraintfbbox.validation.utils as utils
+from rmltraintfbbox.validation.model import BoundingBoxModel
+from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 
 
