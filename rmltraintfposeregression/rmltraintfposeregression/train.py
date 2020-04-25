@@ -1,10 +1,7 @@
 import tensorflow as tf
 import os
-import numpy as np
 import inspect
-from types import SimpleNamespace
-import cv2
-import copy
+import numpy as np
 
 
 class PoseRegressionModel:

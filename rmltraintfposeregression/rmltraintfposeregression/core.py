@@ -7,10 +7,9 @@ from datetime import datetime
 from contextlib import ExitStack
 import json
 import tensorflow as tf
-import numpy as np
 import os
 import shutil
-import cv2
+from pathlib import Path
 
 from ravenml.utils.local_cache import LocalCache, global_cache
 from .train import PoseRegressionModel
@@ -86,7 +85,7 @@ def train(ctx, train: TrainInput, config, comet):
     for dirpath, _, filenames in os.walk(artifact_dir):
         for filename in filenames:
             if "events.out.tfevents" in filename or ".h5" in filename:
-                extra_files.append(os.path.join(dirpath, filename))
+                extra_files.append(Path(os.path.join(dirpath, filename)))
 
     # evaluate
     with ExitStack() as stack:
