@@ -1,11 +1,11 @@
 {
   "dropout": 0.5,
-  "batch_size": 5,
+  "batch_size": 150,
   "phases": [
-    {"optimizer": "RMSProp", "optimizer_args": {"learning_rate": 0.0045}, "epochs": 1, "start_layer": "regression_head"},
-    {"optimizer": "RMSProp", "optimizer_args": {"learning_rate": 0.0045}, "epochs": 1, "start_layer":  "block_16_expand"}
+    {"optimizer": "RMSProp", "optimizer_args": {"learning_rate": 0.0045}, "epochs": 30, "start_layer": "regression_head"},
+    {"optimizer": "RMSProp", "optimizer_args": {"learning_rate": 0.0045}, "epochs": 50, "start_layer":  "block_16_expand"}
   ],
-  "regression_head": [512],
-  "shuffle_buffer": 1,
+  "regression_head": [1024, 512],
+  "shuffle_buffer": 8192,
   "crop_size": 224
 }

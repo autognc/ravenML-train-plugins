@@ -1,7 +1,10 @@
 import tensorflow as tf
 import os
 import numpy as np
+import inspect
+from types import SimpleNamespace
 import cv2
+import copy
 
 
 class PoseRegressionModel:
@@ -43,17 +46,17 @@ class PoseRegressionModel:
                 tf.io.VarLenFeature(tf.float32),
             'image/object/bbox/ymax':
                 tf.io.VarLenFeature(tf.float32),
+            'image/object/pose':
+                tf.io.FixedLenFeature([4], tf.float32),
             'image/encoded':
-                tf.io.FixedLenFeature([], tf.string),
-            'pose':
-                tf.io.FixedLenFeature([4], tf.float32, default_value=[0.707107, 0.707107, 0.707107, 0.707107])
+                tf.io.FixedLenFeature([], tf.string)
         }
 
         cropsize = self.hp['crop_size']
 
         def _parse_function(example):
             parsed = tf.io.parse_single_example(example, features)
-            pose = parsed['pose']
+            pose = parsed['image/object/pose']
 
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed['image/height'], tf.float32)
@@ -63,11 +66,13 @@ class PoseRegressionModel:
             ymin = parsed['image/object/bbox/ymin'].values[0] * height
             ymax = parsed['image/object/bbox/ymax'].values[0] * height
             centroid = tf.stack([(ymax + ymin) / 2, (xmax + xmin) / 2], axis=-1)
-            bbox_size = tf.maximum(xmax - xmin, ymax - ymin)
+            bbox_size = tf.maximum(xmax - xmin, ymax - ymin) * 1.25
 
             # random positioning
             if train:
-                centroid += tf.random.uniform([2], minval=-bbox_size / 4, maxval=bbox_size / 4)
+                bbox_size *= tf.random.uniform([], minval=1.0, maxval=1.5)
+                # size / 10 ensures that object does not go off screen
+                centroid += tf.random.uniform([2], minval=-bbox_size / 10, maxval=bbox_size / 10)
 
             # decode, preprocess to [-1, 1] range, and crop image
             image = self.preprocess_image(parsed['image/encoded'], centroid, bbox_size, cropsize)
@@ -96,29 +101,31 @@ class PoseRegressionModel:
                 # convert back to [-1, 1] format
                 image = image * 2 - 1
 
-            #image = (image - self.mean) / self.stdev
+            # image = (image - self.mean) / self.stdev
             return image, pose
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
             num_examples = int(f.read())
         filenames = tf.io.gfile.glob(os.path.join(self.data_dir, f"{split_name}.record-*"))
 
-        return tf.data.TFRecordDataset(filenames, num_parallel_reads=16).map(_parse_function, num_parallel_calls=16), num_examples
+        return tf.data.TFRecordDataset(filenames, num_parallel_reads=16).map(_parse_function,
+                                                                             num_parallel_calls=16), num_examples
 
-    def train(self, logdir):
+    def train(self, logdir, experiment=None):
         train_dataset, num_train = self._get_dataset('train', True)
         train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer']).batch(self.hp['batch_size']).repeat()
         val_dataset, num_val = self._get_dataset('test', False)
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
-        """for imb, fb in train_dataset:
+        """
+        for imb, fb in train_dataset:
             for im, f in zip(imb, fb):
                 #im = (im.numpy() * self.stdev + self.mean) * 127.5 + 127.5
                 print(f)
                 im = im.numpy() * 127.5 + 127.5
                 im = im.astype(np.uint8)
                 cv2.imshow('a', im)
-                cv2.waitKey(0)"""
-
+                cv2.waitKey(0)
+        """
         # perform training for each training phase
         for i, phase in enumerate(self.hp["phases"]):
             phase_logdir = os.path.join(logdir, f"phase_{i}")
@@ -136,6 +143,8 @@ class PoseRegressionModel:
                     mode='min'
                 )
             ]
+            if experiment:
+                self._fix_comet_keras_callback(experiment, i)
 
             # if this is the first phase, generate a new model with fresh weights.
             # otherwise, load the model from the previous phase's best checkpoint
@@ -167,6 +176,8 @@ class PoseRegressionModel:
                 validation_steps=-(-num_val // self.hp['batch_size']),
                 callbacks=callbacks
             )
+            if experiment:
+                experiment.log_model(f'phase_{i}', model_path)
 
         return model_path
 
@@ -253,10 +264,32 @@ class PoseRegressionModel:
         bbox_size /= 2
         image = tf.squeeze(tf.image.crop_and_resize(
             tf.expand_dims(image, 0),
-            [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0], centroid[1] + bbox_size[1]]],
+            [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0],
+              centroid[1] + bbox_size[1]]],
             [0],
             [cropsize, cropsize],
             extrapolation_value=-1
         ))
         image = tf.ensure_shape(image, [cropsize, cropsize, 3])
         return image
+
+    @staticmethod
+    def _fix_comet_keras_callback(experiment, phase):
+        """A dumb monkey patch to add the phase numbers to comet logging"""
+        callback_class = experiment.get_callback('tf-keras').__class__
+        old_members = getattr(callback_class, 'old_members', None)
+        if not old_members:
+            old_members = dict(callback_class.__dict__)
+            callback_class.old_members = old_members
+        for name, member in old_members.items():
+            if inspect.isfunction(member):
+                def add_phase(*args, __name=name, __member=member, **kwargs):
+                    sig = inspect.signature(__member)
+                    bound = sig.bind(*args, **kwargs)
+                    bound.apply_defaults()
+                    logs = bound.arguments.get('logs', None)
+                    if logs:
+                        bound.arguments['logs'] = {f'phase{phase}_{k}' if 'phase' not in k else k: v for k, v in logs.items()}
+                    __member(**bound.arguments)
+
+                setattr(callback_class, name, add_phase)
