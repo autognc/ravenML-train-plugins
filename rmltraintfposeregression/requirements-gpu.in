@@ -1,0 +1,6 @@
+numpy>=1.16.4
+tensorflow-gpu==2.0.0
+Pillow>=6.0.0
+matplotlib>=3.1.0
+tqdm>=4.32.2
+comet-ml==3.1.6
