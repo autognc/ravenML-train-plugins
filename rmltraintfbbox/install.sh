@@ -24,6 +24,7 @@ while getopts "ugd" opt; do
             ;;
         g)
             requirements_prefix="requirements-gpu"
+            export RML_TF_BBOX_GPU=1
             echo "-- GPU mode!"
             ;;
      esac
@@ -57,6 +58,7 @@ if [ $install -eq 1 ]; then
     pip-compile --output-file $requirements_prefix-compiled.txt $requirements_prefix.in
     pip install -r $requirements_prefix-compiled.txt
     pip install -e .
+    unset RML_TF_BBOX_GPU=1
 else
     # NOTE: this does NOT clean up after the plugin (i.e, leaves plugin dependenices installed)
     # To clean up, use the install_all.sh script at the root of the plugins/ directory

@@ -24,6 +24,7 @@ while getopts "ugd" opt; do
             ;;
         g)
             requirements_prefix="requirements-gpu"
+            export RML_TF_SEMANTIC_GPU=1
             echo "-- GPU mode!"
             ;;
      esac
@@ -35,6 +36,7 @@ if [ $install -eq 1 ]; then
     pip install -r $requirements_prefix.txt
     pip install https://github.com/autognc/models/archive/deeplab-0.0.1.tar.gz\#subdirectory\=research/deeplab
     pip install -e .
+    unset RML_TF_SEMANTIC_GPU=1
 else
     # NOTE: this does NOT clean up after the plugin (i.e, leaves plugin dependenices installed)
     # To clean up, use the install_all.sh script at the root of the plugins/ directory
