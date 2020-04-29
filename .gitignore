@@ -4,8 +4,8 @@ settings.json
 .env
 
 # plugin requirements files
-**/requirements.txt
-**/requirements-gpu.txt
+**/requirements-compiled.txt
+**/requirements-gpu-compiled.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
