@@ -2,7 +2,7 @@ import os
 from setuptools import setup, find_packages
 
 # determine GPU or CPU install via env variable
-gpu = os.getenv('RMLTRAIN_TF_SEMANTIC_GPU')
+gpu = os.getenv('RML_GPU')
 tensorflow_pkg = 'tensorflow==1.14.0' if not gpu else 'tensorflow-gpu==1.14.0'
 
 setup(
