@@ -1,9 +1,4 @@
-import os
 from setuptools import setup, find_packages
-
-# determine GPU or CPU install via env variable
-gpu = os.getenv('RMLTRAIN_TF_POSEREG_GPU')
-tensorflow_pkg = 'tensorflow==2.0.0' if not gpu else 'tensorflow-gpu==2.0.0'
 
 setup(
     name='rmltraintfposeregression',
@@ -15,7 +10,7 @@ setup(
         'pillow==6.0.0',
         'matplotlib==3.1.0',
         'tqdm==4.32.2',
-        tensorflow_pkg
+        'tensorflow==2.1.0'
     ],
     entry_points='''
         [ravenml.plugins.train]
