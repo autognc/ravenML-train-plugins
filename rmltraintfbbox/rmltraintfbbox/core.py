@@ -27,60 +27,20 @@ from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_metadata
+from rmltraintfbbox.options import option_decorator
 from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
 import rmltraintfbbox.validation.utils as utils
 from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 
-
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 
 ### OPTIONS ###
-# put any custom Click options you create here
-comet_opt = click.option(
-    '-c', '--comet', is_flag=True,
-    help='Enable comet on this training run.'
-)
+# defined in options.py for this plugin
 
-# Could possibly go into a different file accesible 
-# by more plugins
-name_opt = click.option(
-    '-n', '--name', type=str, 
-    help='First and Last name of user.'
-)
-
-comments_opt = click.option(
-    '--comments', type=str, 
-    help='Comments about the training.'    
-)
-
-model_opt = click.option(
-    '--model-name', '-m', type=str,
-    help='Name of model to be used for training.'
-)
-
-overwrite_local_opt = click.option(
-    '--overwrite-local', '-o', is_flag=True,
-    help='Overwrite files that may be in path specified.'
-)
-
-optimizer_opt = click.option(
-    '--optimizer', type=str,
-    help='Optimizer for training.'
-)
-
-use_default_config_opt = click.option(
-    '-d', '--use-default-config', is_flag=True,
-    help='Use default configuration for training'
-)
-
-hyperparameters_opt = click.option(
-    '--hyperparameters', type=str,
-    help='List of specified configurations for training'
-)
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
@@ -90,14 +50,7 @@ def tf_bbox(ctx):
     
 @tf_bbox.command(help='Train a model.')
 @verbose_opt
-@comet_opt
-@name_opt
-@comments_opt
-@model_opt
-@overwrite_local_opt
-@optimizer_opt
-@use_default_config_opt
-@hyperparameters_opt
+@option_decorator
 # @kfold_opt
 @pass_train
 @click.pass_context
