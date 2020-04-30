@@ -16,6 +16,7 @@ from colorama import init, Fore
 from pathlib import Path
 from ravenml.utils.local_cache import LocalCache, global_cache
 from ravenml.utils.question import user_confirms, user_input, user_selects
+from ravenml.utils.plugins import raise_option_error
 
 init()
 
@@ -23,7 +24,7 @@ init()
 bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
 
 def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict,
-                         overwrite_local = False, optimizer = None, use_default_config = False, hyperparameters = None):
+                         overwrite_local, optimizer, use_default_config, hyperparameters):
     """ Prepares the system for training.
 
     Creates artifact directory structure. Prompts user for choice of optimizer and
@@ -100,12 +101,21 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     try:
         default_config = defaults[optimizer_name]
     except KeyError as e:
-        raise click.exceptions.BadParameter(optimizer, param=optimizer_name, param_hint='name of optimizer')
-    # prompt user for new configuration
-    if use_default_config:
-        user_config = default_config 
-    else:
-         user_config = _no_user_config(default_config,hyperparameters.strip().split(",")) if hyperparameters else _configuration_prompt(default_config)
+        hint = 'optimizer name, optimizer not supported for this model architecture.'
+        raise_option_error(optimizer, hint)
+        # raise click.exceptions.BadParameter(optimizer, param=optimizer_name, param_hint='name of optimizer')
+    
+    # create custom configuration if necessary
+    user_config = default_config
+    if not use_default_config:
+        if hyperparameters:
+            user_config = _process_hyperparameter_options(user_config, hyperparameters)
+        else:
+            user_config = _configuration_prompt(user_config)
+        # user_config = _no_user_config(default_config,hyperparameters.strip().split(",")) if hyperparameters else _configuration_prompt(default_config)
+        
+    _print_config('Using configuration:', user_config)
+        
     # add to hyperparameter metadata dict
     for field, value in user_config.items():
         hp_metadata[field] = value
@@ -232,36 +242,50 @@ def _configuration_prompt(current_config: dict):
     Returns:
         dict: updated training configuration
     """
-    _print_config(current_config)
+    _print_config('Current training configuration:', current_config)
     if user_confirms('Edit default configuration?'):
         for field in current_config:
             if user_confirms(f'Edit {field}? (default: {current_config[field]})'):
                 current_config[field] = user_input(f'{field}:', default=str(current_config[field]))
     return current_config
 
-def _print_config(config: dict):
+def _print_config(msg: str, config: dict):
     """Prints the given training configuration with colorization.
 
     Args:
         config (dict): training configuration to print
     """
-    click.echo('Current configuration:')
+    click.echo(msg)
     for field, value in config.items():
         click.echo(Fore.GREEN + f'{field}: ' + Fore.WHITE + f'{value}')
 
-def _no_user_config(current_config: dict, hyperparameters: list):
+# def _no_user_config(current_config: dict, hyperparameters: list):
+#     for parameter in hyperparameters:
+#         param = parameter.strip().split("=")
+#         if(param[0] not in current_config):
+#             raise click.exceptions.BadParameter(param[0], param=hyperparameters, param_hint='training configuration')
+#         current_config[param[0]] = param[1]
+#     return current_config
+    
+def _process_hyperparameter_options(current_config: dict, hyperparameters: str):
     """Edits current training configuration based off parameters specified.
 
     Args:
         current_config (dict): current training configuration
-        hyperparameters (list): specified training configuration
+        hyperparameters (str): specified training configuration passed in
+            by user of the form 'param=value,param=value,...'
         
     Returns:
         dict: updated training configuration
     """
+    # TODO: better format checking here (handling spaces, misformatted HP)
+    hp_list = hyperparameters.strip().split(',')
     for parameter in hyperparameters:
         param = parameter.strip().split("=")
         if(param[0] not in current_config):
-            raise click.exceptions.BadParameter(param[0], param=hyperparameters, param_hint='training configuration')
+            hint = f'hyperparameters, {param[0]} is not supported for this model architecture.'
+            raise_option_error(hyperparameters, hint)
+            # raise click.exceptions.BadParameter(param[0], param=hyperparameters, param_hint='training configuration')
         current_config[param[0]] = param[1]
     return current_config
+
