@@ -26,7 +26,7 @@ from ravenml.options import verbose_opt
 from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
-from ravenml.utils.plugins import fill_basic_metadata
+from ravenml.utils.plugins import fill_basic_training_metadata, raise_option_error
 from rmltraintfbbox.options import option_decorator
 from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
 import rmltraintfbbox.validation.utils as utils
@@ -54,9 +54,17 @@ def tf_bbox(ctx):
 # @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comments: str,
-          model_name: str, overwrite_local: bool, optimizer: str, use_default_config: bool,
-          hyperparameters: str):
+def train(ctx: click.Context, 
+            train: TrainInput, 
+            verbose: bool, 
+            comet: bool, 
+            author: str, 
+            comments: str,
+            model_name: str, 
+            overwrite_local: bool, 
+            optimizer: str, 
+            use_default_config: bool,
+            hyperparameters: str):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -72,14 +80,13 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comment
     
     # create training metadata dict and populate with basic information
     metadata = {}
-    fill_basic_metadata(metadata, train.dataset, name, comments)
+    fill_basic_training_metadata(metadata, train.dataset, author=author, comments=comments)
 
     # set base directory for model artifacts 
     base_dir = bbox_cache.path / 'temp' if train.artifact_path is None \
                     else train.artifact_path
  
     # load model choices from YAML
-    models = {}
     models_path = os.path.dirname(__file__) / Path('utils') / Path('model_info.yml')
     with open(models_path, 'r') as stream:
         try:
@@ -93,7 +100,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comment
     try:
         model = models[model_name]
     except KeyError as e:
-        raise click.exceptions.BadParameter(model_name, ctx=ctx, param=model_name, param_hint='model name')
+        hint = 'model name, model is not supported by this plugin.'
+        raise_option_error(model_name, hint)
+    
+    # extract information and add to metadata
     model_type = model['type']
     model_url = model['url']
     metadata['architecture'] = model_name
@@ -112,8 +122,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool, name: str, comment
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
-        name = user_input('What would you like to name the comet experiment?:')
-        experiment.set_name(name)
+        # name = user_input('What would you like to name the comet experiment?:')
+        experiment.set_name(comet)
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.set_git_metadata()
         experiment.set_os_packages()
