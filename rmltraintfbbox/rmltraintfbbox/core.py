@@ -211,7 +211,7 @@ def train(ctx: click.Context,
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
 
-    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, False)
+    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files)
     return result
     
 
