@@ -23,12 +23,12 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
-from ravenml.train.options import kfold_opt, pass_train
+from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
 from ravenml.utils.plugins import fill_basic_training_metadata, raise_option_error
 from rmltraintfbbox.options import option_decorator
-from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
+from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch
 import rmltraintfbbox.validation.utils as utils
 from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
@@ -36,7 +36,6 @@ from google.protobuf import text_format
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
-
 
 ### OPTIONS ###
 # defined in options.py for this plugin
@@ -49,9 +48,7 @@ def tf_bbox(ctx):
     pass
     
 @tf_bbox.command(help='Train a model.')
-@verbose_opt
 @option_decorator
-# @kfold_opt
 @pass_train
 @click.pass_context
 def train(ctx: click.Context, 
@@ -61,7 +58,6 @@ def train(ctx: click.Context,
             author: str, 
             comments: str,
             model_name: str, 
-            overwrite_local: bool, 
             optimizer: str, 
             use_default_config: bool,
             hyperparameters: str):
@@ -83,8 +79,7 @@ def train(ctx: click.Context,
     fill_basic_training_metadata(metadata, train.dataset, author=author, comments=comments)
 
     # set base directory for model artifacts 
-    base_dir = bbox_cache.path / 'temp' if train.artifact_path is None \
-                    else train.artifact_path
+    base_dir = train.artifact_path
  
     # load model choices from YAML
     models_path = os.path.dirname(__file__) / Path('utils') / Path('model_info.yml')
@@ -109,11 +104,11 @@ def train(ctx: click.Context,
     metadata['architecture'] = model_name
     
     # download model arch
-    arch_path = download_model_arch(model_url)
+    arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
-    if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata, 
-                                overwrite_local, optimizer, use_default_config, hyperparameters):
+    if not prepare_for_training(train.plugin_cache, base_dir, train.dataset.path, 
+        arch_path, model_type, metadata, optimizer, use_default_config, hyperparameters):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
@@ -122,7 +117,6 @@ def train(ctx: click.Context,
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
-        # name = user_input('What would you like to name the comet experiment?:')
         experiment.set_name(comet)
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.set_git_metadata()
@@ -133,7 +127,6 @@ def train(ctx: click.Context,
     # get number of training steps
     num_train_steps = metadata['hyperparameters']['train_steps']
     num_train_steps = int(num_train_steps)
-
 
     config = tf.estimator.RunConfig(model_dir=model_dir)
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
@@ -173,7 +166,6 @@ def train(ctx: click.Context,
     # get extra config files
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = str(frozen_graph_path)
-    local_mode = train.artifact_path is not None
     if comet:
         experiment.log_asset(model_path)
 
@@ -219,7 +211,7 @@ def train(ctx: click.Context,
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
 
-    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, local_mode)
+    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, False)
     return result
     
 

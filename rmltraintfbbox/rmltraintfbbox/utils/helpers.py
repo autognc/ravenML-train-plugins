@@ -14,17 +14,22 @@ import click
 import urllib.request
 from colorama import init, Fore
 from pathlib import Path
-from ravenml.utils.local_cache import LocalCache, global_cache
+from ravenml.utils.local_cache import RMLCache
 from ravenml.utils.question import user_confirms, user_input, user_selects
 from ravenml.utils.plugins import raise_option_error
 
 init()
 
-# local cache for the tf_bbox plugin (within ravenML cache)
-bbox_cache = LocalCache(global_cache.path / 'tf-bbox')
-
-def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model_type: str, metadata: dict,
-                         overwrite_local, optimizer, use_default_config, hyperparameters):
+def prepare_for_training(
+    bbox_cache: RMLCache,
+    base_dir: Path, 
+    data_path: Path, 
+    arch_path: Path, 
+    model_type: str, 
+    metadata: dict,
+    optimizer: str, 
+    use_default_config: bool, 
+    hyperparameters: str):
     """ Prepares the system for training.
 
     Creates artifact directory structure. Prompts user for choice of optimizer and
@@ -43,14 +48,6 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     """
     # hyperparameter metadata dictionary
     hp_metadata = {}
-    
-    # check if base_dir exists already and prompt before overwriting
-    if os.path.exists(base_dir):
-        if overwrite_local or user_confirms('Artifact storage location contains old data. Overwrite?'):
-            shutil.rmtree(base_dir)
-        else:
-            return False
-    os.makedirs(base_dir)
     
     # create a data folder within our base_directory
     os.makedirs(base_dir / 'data')
@@ -198,7 +195,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
     metadata['hyperparameters'] = hp_metadata
     return True
 
-def download_model_arch(model_name):
+def download_model_arch(model_name: str, bbox_cache: RMLCache):
     """Downloads the model architecture with the given name.
 
     Args:
