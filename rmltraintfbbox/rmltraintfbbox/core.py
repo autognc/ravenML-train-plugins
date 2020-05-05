@@ -22,6 +22,7 @@ from contextlib import ExitStack
 import traceback
 from pathlib import Path
 from datetime import datetime
+from schema import Schema, Optional
 from ravenml.options import verbose_opt
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
@@ -48,19 +49,20 @@ def tf_bbox(ctx):
     pass
     
 @tf_bbox.command(help='Train a model.')
-@option_decorator
+# @option_decorator
 @pass_train
 @click.pass_context
-def train(ctx: click.Context, 
-            train: TrainInput, 
-            verbose: bool, 
-            comet: bool, 
-            author: str, 
-            comments: str,
-            model_name: str, 
-            optimizer: str, 
-            use_default_config: bool,
-            hyperparameters: str):
+# def train(ctx: click.Context, 
+#             train: TrainInput, 
+#             verbose: bool, 
+#             comet: str, 
+#             author: str, 
+#             comments: str,
+#             model_name: str, 
+#             optimizer: str, 
+#             use_default_config: bool,
+#             hyperparameters: str):
+def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -73,6 +75,14 @@ def train(ctx: click.Context,
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
+
+    ## SET UP CONFIG ##
+    
+
+
+
+
+    return TrainOutput({}, '', Path(''), [])
     
     # create training metadata dict and populate with basic information
     metadata = {}
