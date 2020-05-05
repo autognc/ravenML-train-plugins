@@ -1,0 +1,52 @@
+{
+    "type": "object",
+    "properties": {
+        "verbose": {
+            "type": "boolean",
+            "default": false
+        },
+        "comet": {
+            "type": "string",
+            "default": null
+        },
+        "model_name": {
+            "type": "string",
+            "oneOf": [
+                {
+                    "const": "ssd_mobilenet_v1_coco"
+                },
+                {
+                    "const": "ssd_mobilenet_v1_fpn"
+                },
+                {
+                    "const": "ssd_resnet50_v1_fpn"
+                },
+                {
+                    "const": "ssd_mobilenet_v2_coco"
+                },
+                {
+                    "const": "ssd_inception_v2_coco"
+                },
+                {
+                    "const": "faster_rcnn_resnet101_coco"
+                },
+                {
+                    "const": "faster_rcnn_inception_v2_coco"
+                }
+            ],
+            "default": "<function prompt_model at 0x7f224e92ae18>"
+        }
+    },
+    "allOf": [{
+        "if": {
+            "properties": { "model_name": { "const": "ssd_mobilenet_v1_coco" } }
+        },
+        "then": {
+            "properties": { "optimizer": { "enum": ["list of optimizers for this arch"]} }
+        }
+    }],
+    "required": [],
+    "additionalProperties": false,
+    "$id": "test",
+    "$schema": "http://json-schema.org/draft-07/schema#"
+}
