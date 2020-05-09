@@ -97,7 +97,6 @@ class KeypointsModel:
                 # convert back to [-1, 1] format
                 image = image * 2 - 1
 
-            #image = (image - self.mean) / self.stdev
             return image, pose
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
@@ -146,9 +145,25 @@ class KeypointsModel:
         return model_path
 
     def _gen_model(self):
-        # TODO
-        # return Keras Model(...)
-        return None
+        # TODO support more options
+        assert self.hp['model_arch'] == 'densenet'
+        assert self.hp['model_init_weights'] == 'imagenet'
+
+        keras_app_args = dict(
+            include_top=False, weights='imagenet', 
+            input_shape=(self.hp['crop_size'], self.hp['crop_size'], 3), 
+            pooling='max'
+        )
+        keras_app_model = tf.keras.applications.densenet.DenseNet121(**keras_app_args)
+
+        app_in = keras_app_model.input
+        app_out = keras_app_model.output
+        x = app_in
+        for i in range(self.hp['fc_count']):
+            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
+        x = tf.keras.layers.Dense(self.hp['keypoints'] * 2)(x)
+
+        return tf.keras.models.Model(app_in, x)
 
     @staticmethod
     def preprocess_image(image_data, centroid, bbox_size, cropsize):

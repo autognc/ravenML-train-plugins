@@ -82,7 +82,7 @@ def train(ctx, train: TrainInput, config):
 @pass_train
 @click.pass_context
 def eval(ctx, train, model_path):
-    # TODO load model
+    model = tf.keras.models.load_model(model_path)
     cropsize = model.input.shape[1]
     test_data = utils.dataset_from_directory(train.dataset.path / "test", cropsize)
     test_data = test_data.map(
