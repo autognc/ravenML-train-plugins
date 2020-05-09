@@ -1,0 +1,10 @@
+{
+  "fc_width": 512,
+  "fc_count": 1,
+  "batch_size": 16,
+  "epochs": 100,
+  "crop_size": 250,
+  "shuffle_buffer": 1,
+  "optimizer": "Adam",
+  "optimizer_args": {"lr": 0.001}
+}
