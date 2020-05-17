@@ -7,10 +7,11 @@ setup(
     packages=find_packages(),
     install_requires=[
         'numpy==1.16.4',
-        'tensorflow==2.1.0'
+        'tensorflow==2.1.0',
+        'opencv-python==4.2.0.34'
     ],
     entry_points='''
         [ravenml.plugins.train]
-        tf_pose_regression=rmltraintfkeypoints.core:tf_keypoints
+        tf_keypoints_regression=rmltraintfkeypoints.core:tf_keypoints
     '''
 )

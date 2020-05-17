@@ -13,13 +13,15 @@ class KeypointsModel:
         'RMSProp': tf.keras.optimizers.RMSprop
     }
 
-    def __init__(self, data_dir, hp):
+    def __init__(self, data_dir, hp, keypoints_3d):
         """
         :param data_dir: path to data directory
         :param hp: dictionary of hyperparameters
         """
         self.data_dir = data_dir
         self.hp = hp
+        self.keypoints_3d = keypoints_3d
+        self.nb_keypoints = hp['keypoints']
 
     def _get_dataset(self, split_name, train):
         """
@@ -36,6 +38,8 @@ class KeypointsModel:
                 tf.io.FixedLenFeature([], tf.int64),
             'image/width':
                 tf.io.FixedLenFeature([], tf.int64),
+            'image/object/bbox/keypoints':
+                tf.io.VarLenFeature(tf.float32),
             'image/object/bbox/xmin':
                 tf.io.VarLenFeature(tf.float32),
             'image/object/bbox/xmax':
@@ -54,7 +58,6 @@ class KeypointsModel:
 
         def _parse_function(example):
             parsed = tf.io.parse_single_example(example, features)
-            pose = parsed['pose']
 
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed['image/height'], tf.float32)
@@ -70,25 +73,16 @@ class KeypointsModel:
             if train:
                 centroid += tf.random.uniform([2], minval=-bbox_size / 4, maxval=bbox_size / 4)
 
-            # decode, preprocess to [-1, 1] range, and crop image
-            image = self.preprocess_image(parsed['image/encoded'], centroid, bbox_size, cropsize)
+            # decode, preprocess to [-1, 1] range, and crop image/keypoints
+            image = self.preprocess_image(parsed['image/encoded'], 
+                centroid, bbox_size, cropsize)
+            keypoints = self.preprocess_keypoints(parsed['image/object/bbox/keypoints'], 
+                centroid, bbox_size, cropsize)
 
             # other augmentations
             if train:
                 # image values into the [0, 1] format
                 image = (image + 1) / 2
-
-                # random multiple of 90 degree rotation
-                k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
-                half_angle = tf.cast(k, tf.float32) * (np.pi / 4)
-                w = tf.cos(half_angle)
-                z = tf.sin(half_angle)
-                wn = w * pose[0] - z * pose[3]
-                xn = w * pose[1] - z * pose[2]
-                yn = z * pose[1] + w * pose[2]
-                zn = w * pose[3] + z * pose[0]
-                pose = tf.stack([wn, xn, yn, zn], axis=-1)
-                image = tf.image.rot90(image, k)
 
                 image = tf.image.random_brightness(image, 0.2)
                 image = tf.image.random_saturation(image, 0.8, 1.2)
@@ -97,7 +91,7 @@ class KeypointsModel:
                 # convert back to [-1, 1] format
                 image = image * 2 - 1
 
-            return image, pose
+            return image, keypoints
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
             num_examples = int(f.read())
@@ -164,6 +158,20 @@ class KeypointsModel:
         x = tf.keras.layers.Dense(self.hp['keypoints'] * 2)(x)
 
         return tf.keras.models.Model(app_in, x)
+
+    @staticmethod
+    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize):
+        keypoints = parsed_kps.reshape(-1, 2)[:self.nb_keypoints]
+        # center
+        keypoints[:, 0] -= centroid[0]
+        keypoints[:, 1] -= centroid[1]
+        # trim corner
+        keypoints[:, 0] -= bbox_size[0]
+        keypoints[:, 1] -= bbox_size[1]
+        # resize
+        keypoints[:, 0] *= cropsize / bbox_size[0]
+        keypoints[:, 1] *= cropsize / bbox_size[1]
+        return keypoints.ravel()
 
     @staticmethod
     def preprocess_image(image_data, centroid, bbox_size, cropsize):

@@ -44,9 +44,12 @@ def train(ctx, train: TrainInput, config):
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
+    keypoints_path = train.dataset.path / "keypoints.npy"
 
     with open(config, "r") as f:
         hyperparameters = json.load(f)
+
+    keypoints_3d = np.load(keypoints_path)
 
     # fill metadata
     metadata = {
@@ -61,7 +64,7 @@ def train(ctx, train: TrainInput, config):
     # run training
     print("Beginning training. Hyperparameters:")
     print(json.dumps(hyperparameters, indent=2))
-    trainer = KeypointsModel(data_dir, hyperparameters)
+    trainer = KeypointsModel(data_dir, hyperparameters, keypoints_3d)
     model_path = trainer.train(artifact_dir)
 
     # get Tensorboard files
