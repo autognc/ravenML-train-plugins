@@ -77,7 +77,7 @@ class KeypointsModel:
             image = self.preprocess_image(parsed['image/encoded'], 
                 centroid, bbox_size, cropsize)
             keypoints = self.preprocess_keypoints(parsed['image/object/bbox/keypoints'], 
-                centroid, bbox_size, cropsize)
+                centroid, bbox_size, cropsize, self.nb_keypoints)
 
             # other augmentations
             if train:
@@ -160,8 +160,8 @@ class KeypointsModel:
         return tf.keras.models.Model(app_in, x)
 
     @staticmethod
-    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize):
-        keypoints = parsed_kps.reshape(-1, 2)[:self.nb_keypoints]
+    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, nb_keypoints):
+        keypoints = parsed_kps.reshape(-1, 2)[:nb_keypoints]
         # center
         keypoints[:, 0] -= centroid[0]
         keypoints[:, 1] -= centroid[1]

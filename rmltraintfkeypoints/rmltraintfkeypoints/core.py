@@ -16,11 +16,11 @@ from . import utils
 
 
 @click.group(help='TensorFlow Keypoints Regression.')
-def tf_keypoints_regression():
+def tf_keypoints():
     pass
 
 
-@tf_keypoints_regression.command(help="Train a model.")
+@tf_keypoints.command(help="Train a model.")
 @pass_train
 @click.option("--config", "-c", type=click.Path(exists=True), required=True)
 @click.pass_context
@@ -35,12 +35,13 @@ def train(ctx, train: TrainInput, config):
     artifact_dir = LocalCache(global_cache.path / 'tf-keypoints').path if train.artifact_path is None \
         else train.artifact_path
 
-    if os.path.exists(artifact_dir):
-        if user_confirms('Artifact storage location contains old data. Overwrite?'):
-            shutil.rmtree(artifact_dir)
-        else:
-            return ctx.exit()
-    os.makedirs(artifact_dir)
+    # print(artifact_dir)
+    # if os.path.exists(artifact_dir):
+    #     if user_confirms('Artifact storage location contains old data. Overwrite?'):
+    #         shutil.rmtree(artifact_dir)
+    #     else:
+    #         return ctx.exit()
+    # os.makedirs(artifact_dir)
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
@@ -80,7 +81,7 @@ def train(ctx, train: TrainInput, config):
     return TrainOutput(metadata, artifact_dir, model_path, extra_files, train.artifact_path is not None)
 
 
-@tf_keypoints_regression.command(help="Evaluate a model (Keras .h5 format).")
+@tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
 @pass_train
 @click.pass_context
