@@ -32,16 +32,15 @@ def train(ctx, train: TrainInput, config):
     # After training, create an instance of TrainOutput and return it
 
     # set base directory for model artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-keypoints').path if train.artifact_path is None \
-        else train.artifact_path
+    artifact_dir = (LocalCache(global_cache.path / 'tf-keypoints').path if train.artifact_path is None \
+        else train.artifact_path) / 'artifacts'
 
-    # print(artifact_dir)
-    # if os.path.exists(artifact_dir):
-    #     if user_confirms('Artifact storage location contains old data. Overwrite?'):
-    #         shutil.rmtree(artifact_dir)
-    #     else:
-    #         return ctx.exit()
-    # os.makedirs(artifact_dir)
+    if os.path.exists(artifact_dir):
+        if True or user_confirms('Artifact storage location contains old data. Overwrite?'):
+            shutil.rmtree(artifact_dir)
+        else:
+            return ctx.exit()
+    os.makedirs(artifact_dir)
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
