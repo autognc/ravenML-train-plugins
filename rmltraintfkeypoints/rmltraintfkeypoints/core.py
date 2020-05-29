@@ -87,6 +87,8 @@ def train(ctx, train: TrainInput, config):
 def eval(ctx, train, model_path):
     model = tf.keras.models.load_model(model_path)
     cropsize = model.input.shape[1]
+    nb_keypoints = model.output.shape[1] // 2
+    ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
     test_data = utils.dataset_from_directory(train.dataset.path / "test", cropsize)
     test_data = test_data.map(
         lambda image, metadata: (
@@ -95,6 +97,24 @@ def eval(ctx, train, model_path):
         )
     )
     test_data = test_data.batch(32)
-    model.evaluate(test_data)
+
+    errs = []
+    for image_batch, pose_batch in test_data.as_numpy_iterator():
+        n = image_batch.shape[0]
+        kps_pred = model.predict(image_batch)
+        kps = ((kps_pred * (cropsize // 2)) + cropsize // 2).reshape((-1, nb_keypoints, 2))
+        for i in range(n):
+            r_vec, t_vec = utils.calculate_pose_vectors(ref_points, kps[i], 1422, 1024)
+            err = utils.rvec_geodesic_error(r_vec, pose_batch[i])
+            errs.append(err)
+    
+    print('---- Geodesic Error Stats ----')
+    stats = {
+        'mean': np.mean(errs),
+        'median': np.median(errs),
+        'max': np.max(errs)
+    }
+    for label, val in stats.items():
+        print('{:8s} = {:.3f} ({:.3f} deg)'.format(label, val, np.degrees(val)))
 
 

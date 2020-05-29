@@ -1,6 +1,5 @@
 import tensorflow as tf
 import numpy as np
-import cv2
 import os
 
 
@@ -164,7 +163,7 @@ class KeypointsModel:
     @staticmethod
     def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, nb_keypoints):
         tf.ensure_shape(parsed_kps, (256,))
-        keypoints = tf.reshape(parsed_kps, (256 // 2, 2))[:nb_keypoints]
+        keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
         x_coords = keypoints[:, 0]
         y_coords = keypoints[:, 1]
         # center
@@ -174,11 +173,8 @@ class KeypointsModel:
         x_coords -= bbox_size
         y_coords -= bbox_size
         # resize
-        x_coords *= cropsize / bbox_size
-        y_coords *= cropsize / bbox_size
-        # norm
-        x_coords /= cropsize
-        y_coords /= cropsize
+        x_coords /= bbox_size
+        y_coords /= bbox_size
         return tf.reshape(tf.stack([x_coords, y_coords], axis=1), (nb_keypoints * 2,))
 
     @staticmethod
