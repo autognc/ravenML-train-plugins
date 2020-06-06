@@ -19,10 +19,8 @@ def dataset_from_directory(dir_path, cropsize):
     Get a Tensorflow dataset that generates samples from a directory with test data
     that is not in TFRecord format (i.e. a directory with image_*.png, meta_*.json, and bboxLabels_*.xml files).
     The images are cropped to the spacecraft using the bounding box truth data in the XML files.
-
     :param dir_path: the path to the directory
     :param cropsize: the output size for the images, in pixels
-
     :return: a Tensorflow dataset that generates (image, metadata) tuples where image is a [cropsize, cropsize, 3]
     Tensor and metadata is a nested dictionary of Tensors.
     """
@@ -46,8 +44,7 @@ def dataset_from_directory(dir_path, cropsize):
 
             # load and crop image
             image_data = tf.io.read_file(image_file)
-            image = KeypointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
-            
+            _, image = KeypointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
             yield image, metadata
 
     meta_file_0 = glob.glob(os.path.join(dir_path, "meta_*.json"))[0]
@@ -73,10 +70,16 @@ def calculate_pose_vectors(referance_points, keypoints, focal_length, image_size
 
 def rvec_geodesic_error(r_vec, pose_quat):
     r_pred = Rotation.from_rotvec(r_vec.squeeze())
-    # TODO +/- 90 deg adj
     w, x, y, z = pose_quat
     r_truth = Rotation.from_quat([x, y, z, w])
-    return min(geodesic_error(r_pred, r_truth), geodesic_error(r_pred, r_truth))
+    return min(
+        geodesic_error(_adj_rotation_z(r_pred, 90), r_truth), 
+        geodesic_error(_adj_rotation_z(r_pred, -90), r_truth))
+
+
+def _adj_rotation_z(rot, degs):
+    x, y, z = rot.as_euler('xyz', degrees=True)
+    return Rotation.from_euler('xyz', [x, y, z + degs], degrees=True)
 
 
 def geodesic_error(r1, r2):

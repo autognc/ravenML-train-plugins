@@ -49,7 +49,7 @@ class KeypointsModel:
                 tf.io.VarLenFeature(tf.float32),
             'image/encoded':
                 tf.io.FixedLenFeature([], tf.string),
-            'pose':
+            'image/object/pose':
                 tf.io.FixedLenFeature([4], tf.float32, default_value=[0.707107, 0.707107, 0.707107, 0.707107])
         }
 
@@ -66,17 +66,19 @@ class KeypointsModel:
             ymin = parsed['image/object/bbox/ymin'].values[0] * height
             ymax = parsed['image/object/bbox/ymax'].values[0] * height
             centroid = tf.stack([(ymax + ymin) / 2, (xmax + xmin) / 2], axis=-1)
-            bbox_size = tf.maximum(xmax - xmin, ymax - ymin)
+            bbox_size = tf.maximum(xmax - xmin, ymax - ymin) * 1.25
 
             # random positioning
             if train:
-                centroid += tf.random.uniform([2], minval=-bbox_size / 4, maxval=bbox_size / 4)
+                bbox_size *= tf.random.uniform([], minval=1.0, maxval=1.5)
+                # size / 10 ensures that object does not go off screen
+                centroid += tf.random.uniform([2], minval=-bbox_size / 10, maxval=bbox_size / 10)
 
             # decode, preprocess to [-1, 1] range, and crop image/keypoints
-            image = self.preprocess_image(parsed['image/encoded'], 
+            old_dims, image = self.preprocess_image(parsed['image/encoded'], 
                 centroid, bbox_size, cropsize)
             keypoints = self.preprocess_keypoints(parsed['image/object/keypoints'].values, 
-                centroid, bbox_size, cropsize, self.nb_keypoints)
+                centroid, bbox_size, cropsize, old_dims, self.nb_keypoints)
 
             # other augmentations
             if train:
@@ -103,6 +105,16 @@ class KeypointsModel:
         train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer']).batch(self.hp['batch_size']).repeat()
         val_dataset, num_val = self._get_dataset('test', False)
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
+
+        # imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
+        # img, kp = img[0], kps[0]
+        # img = ((img + 1) / 2 * 255).astype(np.uint8)
+        # w, h, _ = img.shape
+        # for i in range(len(kp) // 2):
+        #     y = int(kp[i * 2] * (w // 2) + (w // 2))
+        #     x = int(kp[i * 2 + 1] * (w // 2) + (w // 2))
+        #     cv2.circle(img, (x, y), 4, (255, 255, 255), -1)
+        # cv2.imwrite('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
         model_path = os.path.join(logdir, "model.h5")
         callbacks = [
@@ -152,8 +164,7 @@ class KeypointsModel:
 
         app_in = keras_app_model.input
         app_out = keras_app_model.output
-        x = app_in
-        x = tf.keras.layers.Flatten()(x)
+        x = app_out
         for i in range(self.hp['fc_count']):
             x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
@@ -161,37 +172,36 @@ class KeypointsModel:
         return tf.keras.models.Model(app_in, x)
 
     @staticmethod
-    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, nb_keypoints):
+    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints):
         tf.ensure_shape(parsed_kps, (256,))
         keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
         x_coords = keypoints[:, 0]
         y_coords = keypoints[:, 1]
+        # denorm
+        x_coords *= img_size[0]
+        y_coords *= img_size[1]
         # center
         x_coords -= centroid[0]
         y_coords -= centroid[1]
-        # trim corner
-        x_coords -= bbox_size
-        y_coords -= bbox_size
-        # resize
-        x_coords /= bbox_size
-        y_coords /= bbox_size
+        # renorm
+        x_coords /= (bbox_size // 2)
+        y_coords /= (bbox_size // 2)
         return tf.reshape(tf.stack([x_coords, y_coords], axis=1), (nb_keypoints * 2,))
 
     @staticmethod
     def preprocess_image(image_data, centroid, bbox_size, cropsize):
         """
         Performs preproccessing on a single image for feeding into the network.
-
         :param image_data: raw image data as a bytestring
         :param centroid: the center of the bounding box to crop to, in pixel coordinates
         :param bbox_size: the side length of the bbox to crop to, in pixels
         :param cropsize: the output size of the cropped image
-
         :return: the decoded image cropped to a [bbox_size, bbox_size] square centered around centroid
         and resized to [cropsize, cropsize]
         """
         image = tf.io.decode_image(image_data, channels=3)
-        # TODO scale
+        # this rescales inputs to the range [-1, 1], which should be what the model expects
+        image = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(image, tf.float32))
 
         # ensure types
         bbox_size = tf.cast(bbox_size, tf.float32)
@@ -206,10 +216,11 @@ class KeypointsModel:
         bbox_size /= 2
         image = tf.squeeze(tf.image.crop_and_resize(
             tf.expand_dims(image, 0),
-            [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0], centroid[1] + bbox_size[1]]],
+            [[centroid[0] - bbox_size[0], centroid[1] - bbox_size[1], centroid[0] + bbox_size[0],
+              centroid[1] + bbox_size[1]]],
             [0],
             [cropsize, cropsize],
             extrapolation_value=-1
         ))
         image = tf.ensure_shape(image, [cropsize, cropsize, 3])
-        return image
+        return imdims, image
