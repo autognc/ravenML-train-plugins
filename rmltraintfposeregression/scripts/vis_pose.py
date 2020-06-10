@@ -21,10 +21,12 @@ import bpy
 import time
 import numpy as np
 import cv2
+import shutil
 from mathutils import Quaternion
 
 DOWNSCALE_FACTOR = 1
 OBJ_DISTANCE_FACTOR = 10
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -33,6 +35,13 @@ def main():
     parser.add_argument('-o', '--output', type=str, help="Path to output directory", required=True)
     parser.add_argument('--object', type=str, help="Name of the object to display as a wireframe (optional)", required=False)
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:])
+
+    if os.path.exists(args.output):
+        if input('Artifact storage location contains old data. Overwrite?') in ['y', 'Y']:
+            shutil.rmtree(args.output)
+        else:
+            return
+    os.makedirs(args.output)
 
     # set the background color to pure black
     bpy.context.preferences.themes[0].view_3d.space.gradients.high_gradient = (0, 0, 0)

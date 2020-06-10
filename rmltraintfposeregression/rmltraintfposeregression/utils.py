@@ -40,7 +40,7 @@ def dataset_from_directory(dir_path, cropsize):
             ymin = bbox['ymin']
             ymax = bbox['ymax']
             centroid = tf.convert_to_tensor([(ymax + ymin) / 2, (xmax + xmin) / 2], dtype=tf.float32)
-            bbox_size = tf.cast(tf.maximum(xmax - xmin, ymax - ymin), tf.float32)
+            bbox_size = tf.cast(tf.maximum(xmax - xmin, ymax - ymin), tf.float32) * 1.25
 
             # load and crop image
             image_data = tf.io.read_file(image_file)

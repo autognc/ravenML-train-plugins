@@ -4,8 +4,10 @@ Run inference on a directory of test data using a model in the Tensorflow SavedM
 
 import tensorflow as tf
 import time
+import os
 import argparse
 import json
+from ravenml.utils.question import user_confirms
 from rmltraintfposeregression.utils import dataset_from_directory, recursive_map_dict
 from rmltraintfposeregression.train import PoseRegressionModel
 
@@ -14,8 +16,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, help="Path to saved model", required=True)
     parser.add_argument('-d', '--directory', type=str, help="Path to data directory", required=True)
+    parser.add_argument('-o', '--output', type=str, help="Path to write output (json)", required=True)
     parser.add_argument('-n', '--num', type=int, help="Number of images to process (optional)")
     args = parser.parse_args()
+
+    if os.path.exists(args.output):
+        if not user_confirms('Output path exists. Overwrite?'):
+            return
 
     model = tf.compat.v2.saved_model.load(args.model)
     cropsize = model.__call__.concrete_functions[0].inputs[0].shape[1]
@@ -48,7 +55,7 @@ def main():
     avg_time = sum(result['time'] for result in results) / len(results)
     avg_error = sum(result['pose_error'] for result in results) / len(results)
     print(f"Average time: {int(avg_time * 1000)}ms, average error: {avg_error}")
-    with open('results.json', 'w') as f:
+    with open(args.output, 'w') as f:
         json.dump(results, f, indent=2)
 
 

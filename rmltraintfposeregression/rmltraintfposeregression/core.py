@@ -66,7 +66,7 @@ def train(ctx, train: TrainInput, config, comet):
         experiment.set_os_packages()
         experiment.set_pip_packages()
         experiment.set_code()
-        experiment.log_asset_data(metadata, file_name='metadata.json')
+        experiment.log_asset_data(metadata, name='metadata.json')
 
     # run training
     print("Beginning training. Hyperparameters:")
@@ -104,7 +104,7 @@ def test(train, model_path):
 
 
 def _test(dataset_path, model_path):
-    model = tf.keras.models.load_model(model_path, compile=False)
+    model = tf.keras.models.load_model(model_path, compile=False, custom_objects={'tf': tf})
     model.compile(loss=PoseRegressionModel.pose_loss, optimizer=tf.keras.optimizers.SGD())
 
     cropsize = model.input.shape[1]
