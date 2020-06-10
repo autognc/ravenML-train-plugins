@@ -36,7 +36,7 @@ def train(ctx, train: TrainInput, config):
         else train.artifact_path) / 'artifacts'
 
     if os.path.exists(artifact_dir):
-        if True or user_confirms('Artifact storage location contains old data. Overwrite?'):
+        if user_confirms('Artifact storage location contains old data. Overwrite?'):
             shutil.rmtree(artifact_dir)
         else:
             return ctx.exit()
@@ -55,7 +55,7 @@ def train(ctx, train: TrainInput, config):
     metadata = {
         'architecture': 'keypoints_regression',
         'date_started_at': datetime.utcnow().isoformat() + "Z",
-        'dataset_used': train.dataset.metadata,
+        'dataset_used': train.dataset.name,
         'config': hyperparameters
     }
     with open(artifact_dir / 'metadata.json', 'w') as f:

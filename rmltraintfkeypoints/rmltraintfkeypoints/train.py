@@ -50,7 +50,7 @@ class KeypointsModel:
             'image/encoded':
                 tf.io.FixedLenFeature([], tf.string),
             'image/object/pose':
-                tf.io.FixedLenFeature([4], tf.float32, default_value=[0.707107, 0.707107, 0.707107, 0.707107])
+                tf.io.FixedLenFeature([4], tf.float32)
         }
 
         cropsize = self.hp['crop_size']
@@ -98,11 +98,16 @@ class KeypointsModel:
             num_examples = int(f.read())
         filenames = tf.io.gfile.glob(os.path.join(self.data_dir, f"{split_name}.record-*"))
 
-        return tf.data.TFRecordDataset(filenames, num_parallel_reads=16).map(_parse_function, num_parallel_calls=16), num_examples
+        dataset = tf.data.TFRecordDataset(filenames, num_parallel_reads=16)
+        if self.hp['cache_train_data']:
+            dataset = dataset.cache()
+        return dataset.map(_parse_function, num_parallel_calls=16), num_examples
 
     def train(self, logdir):
         train_dataset, num_train = self._get_dataset('train', True)
-        train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer']).batch(self.hp['batch_size']).repeat()
+        train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer_size']).batch(self.hp['batch_size']).repeat()
+        if self.hp['prefetch_num_batches']:
+            train_dataset = train_dataset.prefetch(self.hp['prefetch_num_batches'])
         val_dataset, num_val = self._get_dataset('test', False)
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
 
