@@ -3,6 +3,8 @@ from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import user_confirms
 from datetime import datetime
 import matplotlib.pyplot as plt
+from comet_ml import Experiment
+from contextlib import ExitStack
 import tensorflow as tf
 import numpy as np
 import random
@@ -25,8 +27,9 @@ def tf_keypoints():
 @tf_keypoints.command(help="Train a model.")
 @pass_train
 @click.option("--config", "-c", type=click.Path(exists=True), required=True)
+@click.option("--comet", type=str, help="Enable comet integration under an experiment by this name", default=None)
 @click.pass_context
-def train(ctx, train: TrainInput, config):
+def train(ctx, train: TrainInput, config, comet):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -63,11 +66,24 @@ def train(ctx, train: TrainInput, config):
     with open(artifact_dir / 'metadata.json', 'w') as f:
         json.dump(metadata, f, indent=2)
 
+    experiment = None
+    if comet:
+        experiment = Experiment(workspace='seeker-rd', project_name='keypoints-pose-regression')
+        experiment.set_name(comet)
+        experiment.log_parameters(hyperparameters)
+        experiment.set_os_packages()
+        experiment.set_pip_packages()
+        experiment.set_code()
+        experiment.log_asset_data(metadata, name='metadata.json')
+
     # run training
     print("Beginning training. Hyperparameters:")
     print(json.dumps(hyperparameters, indent=2))
     trainer = KeypointsModel(data_dir, hyperparameters, keypoints_3d)
-    model_path = trainer.train(artifact_dir)
+    with ExitStack() as stack:
+        if experiment:
+            stack.enter_context(experiment.train())
+        model_path = trainer.train(artifact_dir, experiment)
 
     # get Tensorboard files
     # FIXME: The directory structure is very important for interpreting the Tensorboard logs

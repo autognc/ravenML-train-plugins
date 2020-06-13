@@ -103,7 +103,7 @@ class KeypointsModel:
             dataset = dataset.cache()
         return dataset.map(_parse_function, num_parallel_calls=16), num_examples
 
-    def train(self, logdir):
+    def train(self, logdir, experiment=None):
         train_dataset, num_train = self._get_dataset('train', True)
         train_dataset = train_dataset.shuffle(self.hp['shuffle_buffer_size']).batch(self.hp['batch_size']).repeat()
         if self.hp['prefetch_num_batches']:
@@ -152,6 +152,8 @@ class KeypointsModel:
             validation_steps=num_val // self.hp['batch_size'],
             callbacks=callbacks
         )
+        if experiment:
+            experiment.log_model('model', model_path)
 
         return model_path
 
