@@ -11,7 +11,8 @@ setup(
         'tensorflow==2.1.0',
         'opencv-python==4.2.0.34',
         'tqdm==4.36.1',
-        'matplotlib==2.2.2'
+        'matplotlib==2.2.2',
+        'comet-ml==2.0.13'
     ],
     entry_points='''
         [ravenml.plugins.train]

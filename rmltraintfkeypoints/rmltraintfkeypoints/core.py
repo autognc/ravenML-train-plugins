@@ -3,6 +3,8 @@ from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import user_confirms
 from datetime import datetime
 import matplotlib.pyplot as plt
+from comet_ml import Experiment
+from contextlib import ExitStack
 import tensorflow as tf
 import numpy as np
 import random
