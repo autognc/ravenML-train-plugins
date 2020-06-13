@@ -5,6 +5,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
+import random
 import shutil
 import click
 import json
@@ -83,6 +84,8 @@ def train(ctx, train: TrainInput, config):
 
 @tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
+@click.option('--pnp_crop_size', default=1024)
+@click.option('--pnp_focal_length', default=1422)
 @click.option('--plot', is_flag=True)
 @click.option('--render_poses', is_flag=True)
 @pass_train
@@ -118,8 +121,44 @@ def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422, plot
                 cv2.line(img, (p2[1], p2[0]), (p4[1], p4[0]), (255, 255, 255), 6)
                 cv2.imwrite('pose-render-{:04d}.png'.format(img_cnt), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
             img_cnt += 1
-    
-    print('\n---- Geodesic Error Stats ----')
+    _display_geodesic_stats('Model Preds', errs, plot=plot)
+
+
+@tf_keypoints.command(help="Evaluate ground truth PnP.")
+@click.option('--keypoints', default=20)
+@click.option('--cropsize', default=250)
+@click.option('--pnp_crop_size', default=1024)
+@click.option('--pnp_focal_length', default=1422)
+@click.option('--swap_random_percent', default=0, help="Randomly swap keypoints to test pnp.")
+@pass_train
+@click.pass_context
+def evalpnp(ctx, train, keypoints=20, cropsize=250, pnp_crop_size=1024, pnp_focal_length=1422, swap_random_percent=0):
+
+    errs = []
+    img_cnt = 0
+    rand_swap_amt = int(swap_random_percent / 100 * keypoints)
+    if rand_swap_amt > 0:
+        print('WARN: Randomly swapping {} keypoints.'.format(rand_swap_amt))
+
+    for image, ref_points, kps, pose in utils.yield_meta_examples(train.dataset.path, cropsize):
+
+        kps_adj = (kps * (pnp_crop_size // 2)) + (pnp_crop_size // 2)
+        if rand_swap_amt > 0:
+            swaps = random.sample(list(range(keypoints)), k=rand_swap_amt * 2)
+            for a, b in zip(swaps[::2], swaps[1::2]):
+                kps_adj[a], kps_adj[b] = kps_adj[b], kps_adj[a]
+
+        r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
+            ref_points[:keypoints], kps_adj[:keypoints], 
+            pnp_focal_length, pnp_crop_size)
+        err = utils.rvec_geodesic_error(r_vec, pose)
+        errs.append(err)
+
+    _display_geodesic_stats('PnP on truth, |kps|={})'.format(keypoints), errs)
+
+
+def _display_geodesic_stats(title, errs, plot=False):
+    print('\n---- Geodesic Error Stats ({}) ----'.format(title))
     stats = {
         'mean': np.mean(errs),
         'median': np.median(errs),
@@ -127,10 +166,7 @@ def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422, plot
     }
     for label, val in stats.items():
         print('{:8s} = {:.3f} ({:.3f} deg)'.format(label, val, np.degrees(val)))
-
     if plot:
         plt.hist([np.degrees(val) for val in errs])
-        plt.title('Errors')
+        plt.title(title)
         plt.show()
-
-
