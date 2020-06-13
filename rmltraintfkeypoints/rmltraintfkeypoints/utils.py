@@ -2,6 +2,7 @@ from .train import KeypointsModel
 from scipy.spatial.transform import Rotation
 import tensorflow as tf
 import numpy as np
+import tqdm
 import glob
 import json
 import cv2
@@ -54,6 +55,26 @@ def dataset_from_directory(dir_path, cropsize):
     return tf.data.Dataset.from_generator(generator, (tf.float32, dtypes))
 
 
+def yield_eval_batches(dataset_path, model_path, pnp_crop_size, batch_size=32):
+    model = tf.keras.models.load_model(model_path)
+    cropsize = model.input.shape[1]
+    nb_keypoints = model.output.shape[1] // 2
+    ref_points = np.load(dataset_path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
+    test_data = dataset_from_directory(dataset_path / "test", cropsize)
+    test_data = test_data.map(
+        lambda image, metadata: (
+            tf.ensure_shape(image, [cropsize, cropsize, 3]),
+            tf.ensure_shape(metadata["pose"], [4])
+        )
+    )
+    test_data = test_data.batch(batch_size)
+    for image_batch, pose_batch in tqdm.tqdm(test_data.as_numpy_iterator()):
+        images = ((image_batch + 1) / 2 * 255).astype(np.uint8)
+        kps_pred = model.predict(image_batch)
+        kps = ((kps_pred * (pnp_crop_size // 2)) + pnp_crop_size // 2).reshape((-1, nb_keypoints, 2))
+        yield ref_points, pose_batch, images, kps
+
+
 def calculate_pose_vectors(referance_points, keypoints, focal_length, image_size):
     dist_coeffs = np.zeros((5, 1), dtype=np.float32)
     cam_matrix = np.array([
@@ -65,7 +86,7 @@ def calculate_pose_vectors(referance_points, keypoints, focal_length, image_size
         referance_points, keypoints,
         cam_matrix, dist_coeffs)
     assert ret, 'Pose solve failed.'
-    return r_vec, t_vec
+    return r_vec, t_vec, cam_matrix, dist_coeffs
 
 
 def rvec_geodesic_error(r_vec, pose_quat):

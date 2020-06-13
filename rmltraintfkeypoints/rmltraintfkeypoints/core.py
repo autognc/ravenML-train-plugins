@@ -2,6 +2,7 @@ from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import user_confirms
 from datetime import datetime
+import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
 import shutil
@@ -82,35 +83,43 @@ def train(ctx, train: TrainInput, config):
 
 @tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
+@click.option('--plot', is_flag=True)
+@click.option('--render_poses', is_flag=True)
 @pass_train
 @click.pass_context
-def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422):
-    model = tf.keras.models.load_model(model_path)
-    cropsize = model.input.shape[1]
-    nb_keypoints = model.output.shape[1] // 2
-    ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
-    test_data = utils.dataset_from_directory(train.dataset.path / "test", cropsize)
-    test_data = test_data.map(
-        lambda image, metadata: (
-            tf.ensure_shape(image, [cropsize, cropsize, 3]),
-            tf.ensure_shape(metadata["pose"], [4])
-        )
-    )
-    test_data = test_data.batch(32)
-
+def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422, plot=False, render_poses=False):
     errs = []
-    for image_batch, pose_batch in test_data.as_numpy_iterator():
-        n = image_batch.shape[0]
-        kps_pred = model.predict(image_batch)
-        kps = ((kps_pred * (pnp_crop_size // 2)) + pnp_crop_size // 2).reshape((-1, nb_keypoints, 2))
+    img_cnt = 0
+    for ref_points, poses, images, kps in utils.yield_eval_batches(train.dataset.path, model_path, pnp_crop_size):
+        n = images.shape[0]
         for i in range(n):
-            r_vec, t_vec = utils.calculate_pose_vectors(
+            example_kps = kps[i]
+            r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
                 ref_points, kps[i], 
                 pnp_focal_length, pnp_crop_size)
-            err = utils.rvec_geodesic_error(r_vec, pose_batch[i])
+            err = utils.rvec_geodesic_error(r_vec, poses[i])
             errs.append(err)
+            if render_poses:
+                img = cv2.resize(images[i], (pnp_crop_size, pnp_crop_size))
+                for i in range(len(example_kps)):
+                    y = int(example_kps[i, 0])
+                    x = int(example_kps[i, 1])
+                    cv2.circle(img, (x, y), 4, (255, 0, 255), -1)
+                landmarks = cv2.projectPoints(np.array([
+                    [0, 5, -3.18566],
+                    [0, -5, -3.18566],
+                    [0, 0, -3.18566],
+                    [0, 0, 3.18566],
+                ], np.float32), r_vec, t_vec, cam_matrix, coefs)[0].squeeze()
+                p1, p2, p3, p4 = landmarks
+                cv2.line(img, (p1[1], p1[0]), (p2[1], p2[0]), (255, 255, 255), 6)
+                cv2.line(img, (p3[1], p3[0]), (p4[1], p4[0]), (255, 255, 255), 6)
+                cv2.line(img, (p1[1], p1[0]), (p4[1], p4[0]), (255, 255, 255), 6)
+                cv2.line(img, (p2[1], p2[0]), (p4[1], p4[0]), (255, 255, 255), 6)
+                cv2.imwrite('pose-render-{:04d}.png'.format(img_cnt), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            img_cnt += 1
     
-    print('---- Geodesic Error Stats ----')
+    print('\n---- Geodesic Error Stats ----')
     stats = {
         'mean': np.mean(errs),
         'median': np.median(errs),
@@ -118,5 +127,10 @@ def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422):
     }
     for label, val in stats.items():
         print('{:8s} = {:.3f} ({:.3f} deg)'.format(label, val, np.degrees(val)))
+
+    if plot:
+        plt.hist([np.degrees(val) for val in errs])
+        plt.title('Errors')
+        plt.show()
 
 
