@@ -100,30 +100,40 @@ def train(ctx, train: TrainInput, config, comet):
 
 @tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
+@click.option('--keypoints', default=20)
 @click.option('--pnp_crop_size', default=1024)
 @click.option('--pnp_focal_length', default=1422)
 @click.option('--plot', is_flag=True)
 @click.option('--render_poses', is_flag=True)
 @pass_train
 @click.pass_context
-def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422, plot=False, render_poses=False):
+def eval(ctx, train, model_path, keypoints=20, pnp_crop_size=1024, pnp_focal_length=1422, plot=False, render_poses=False):
     errs = []
+    sum_err_by_keypoint = np.zeros((keypoints,))
     img_cnt = 0
-    for ref_points, poses, images, kps in utils.yield_eval_batches(train.dataset.path, model_path, pnp_crop_size):
+    for ref_points, pose_batch, images, kps_pred_batch, kps_truth_batch \
+            in utils.yield_eval_batches(train.dataset.path, model_path, pnp_crop_size):
         n = images.shape[0]
         for i in range(n):
-            example_kps = kps[i]
+            image = images[i]
+            kps = kps_pred_batch[i]
+            kps_true = kps_truth_batch[i]
             r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
-                ref_points, kps[i], 
+                ref_points, kps, 
                 pnp_focal_length, pnp_crop_size)
-            err = utils.rvec_geodesic_error(r_vec, poses[i])
-            errs.append(err)
+            errs.append(utils.rvec_geodesic_error(r_vec, pose_batch[i]))
+            for kp_idx in range(len(kps)):
+                sum_err_by_keypoint[kp_idx] += np.linalg.norm(kps_true[kp_idx] - kps[kp_idx])
             if render_poses:
-                img = cv2.resize(images[i], (pnp_crop_size, pnp_crop_size))
-                for i in range(len(example_kps)):
-                    y = int(example_kps[i, 0])
-                    x = int(example_kps[i, 1])
-                    cv2.circle(img, (x, y), 4, (255, 0, 255), -1)
+                dimg = cv2.resize(image, (pnp_crop_size, pnp_crop_size))
+                for kp_idx in range(len(kps)):
+                    y = int(kps[kp_idx, 0])
+                    x = int(kps[kp_idx, 1])
+                    ay = int(kps_true[kp_idx, 0])
+                    ax = int(kps_true[kp_idx, 1])
+                    cv2.circle(dimg, (x, y), 5, (255, 0, 255), -1)
+                    cv2.circle(dimg, (ax, ay), 5, (255, 255, 255), -1)
+                    cv2.line(dimg, (x, y), (ax, ay), (255, 0, 0), 3)
                 landmarks = cv2.projectPoints(np.array([
                     [0, 5, -3.18566],
                     [0, -5, -3.18566],
@@ -131,12 +141,14 @@ def eval(ctx, train, model_path, pnp_crop_size=1024, pnp_focal_length=1422, plot
                     [0, 0, 3.18566],
                 ], np.float32), r_vec, t_vec, cam_matrix, coefs)[0].squeeze()
                 p1, p2, p3, p4 = landmarks
-                cv2.line(img, (p1[1], p1[0]), (p2[1], p2[0]), (255, 255, 255), 6)
-                cv2.line(img, (p3[1], p3[0]), (p4[1], p4[0]), (255, 255, 255), 6)
-                cv2.line(img, (p1[1], p1[0]), (p4[1], p4[0]), (255, 255, 255), 6)
-                cv2.line(img, (p2[1], p2[0]), (p4[1], p4[0]), (255, 255, 255), 6)
-                cv2.imwrite('pose-render-{:04d}.png'.format(img_cnt), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                cv2.line(dimg, (p1[1], p1[0]), (p2[1], p2[0]), (255, 0, 255), 6)
+                cv2.line(dimg, (p3[1], p3[0]), (p4[1], p4[0]), (255, 0, 255), 6)
+                cv2.line(dimg, (p1[1], p1[0]), (p4[1], p4[0]), (255, 0, 255), 6)
+                cv2.line(dimg, (p2[1], p2[0]), (p4[1], p4[0]), (255, 0, 255), 6)
+                cv2.imwrite('pose-render-{:04d}.png'.format(img_cnt), cv2.cvtColor(dimg, cv2.COLOR_RGB2BGR))
             img_cnt += 1
+
+    print('Error by Keypoint:', sum_err_by_keypoint / img_cnt)
     _display_geodesic_stats('Model Preds', errs, plot=plot)
 
 

@@ -64,15 +64,29 @@ def yield_eval_batches(dataset_path, model_path, keypoints_scale, batch_size=32)
     test_data = test_data.map(
         lambda image, metadata: (
             tf.ensure_shape(image, [cropsize, cropsize, 3]),
-            tf.ensure_shape(metadata["pose"], [4])
+            metadata
         )
     )
     test_data = test_data.batch(batch_size)
-    for image_batch, pose_batch in tqdm.tqdm(test_data.as_numpy_iterator()):
-        images = ((image_batch + 1) / 2 * 255).astype(np.uint8)
+    for image_batch, metadata in tqdm.tqdm(test_data.as_numpy_iterator()):
+        n = len(image_batch)
+        pose_batch = metadata['pose']
+        bbox_batch = metadata['bboxes']['cygnus']
         kps_pred = model.predict(image_batch)
+        kps_actual = np.empty_like(kps_pred)
+        for i in range(n):
+            bbox = {key: value[i] for key, value in bbox_batch.items()}
+            bbox_size = max(bbox['ymax'] - bbox['ymin'], bbox['xmax'] - bbox['xmin']) * 1.25
+            centroid = [(bbox['ymax'] + bbox['ymin']) / 2, (bbox['xmax'] + bbox['xmin']) / 2]
+            pose = pose_batch[i]
+            kps_actual[i] = KeypointsModel.preprocess_keypoints(
+                metadata['keypoints'][i].reshape((-1,)), 
+                centroid, bbox_size, cropsize, (1024, 1024), 128
+            ).numpy()[:nb_keypoints * 2]
         kps = ((kps_pred * (keypoints_scale // 2)) + keypoints_scale // 2).reshape((-1, nb_keypoints, 2))
-        yield ref_points, pose_batch, images, kps
+        kps_truth = ((kps_actual * (keypoints_scale // 2)) + keypoints_scale // 2).reshape((-1, nb_keypoints, 2))
+        images = ((image_batch + 1) / 2 * 255).astype(np.uint8)
+        yield ref_points, pose_batch, images, kps, kps_truth
 
 
 def yield_meta_examples(dataset_path, crop_size, batch_size=32):
