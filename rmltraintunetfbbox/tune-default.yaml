@@ -1,0 +1,10 @@
+cluster_name: tune-default
+provider: {type: aws, region: us-west-1}
+auth: {ssh_user: ubuntu}
+min_workers: 3
+max_workers: 3
+
+head_node: {InstanceType: t3.micro, ImageId: ami-04d22fcef31907a74}
+worker_nodes: {InstanceType: t3.micro, ImageId: ami-04d22fcef31907a74}
+setup_commands: # Set up each node.
+    - pip install ray torch torchvision tabulate tensorboard
