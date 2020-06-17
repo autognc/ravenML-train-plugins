@@ -91,7 +91,7 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
         except yaml.YAMLError as exc:
             print(exc)
 
-    optimizer_name = defaults.keys()[0]
+    optimizer_name =  user_selects('Choose optimizer', defaults.keys())
     hp_metadata['optimizer'] = optimizer_name
     
     ### PIPELINE CONFIG CREATION ###

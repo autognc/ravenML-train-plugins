@@ -104,7 +104,8 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     
     # download model arch
     arch_path = download_model_arch(model_url)
-    
+    print(base_dir)
+    print(type(base_dir))
     ##### start of setup
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
@@ -116,8 +117,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     train_spec = {
         "run": MyTrainableEstimator,
         "resources_per_trial": {
-            "cpu": 1,
-            "gpu": 1
+            "cpu": 5,
         },
         "stop": {
             "accuracy": 1.0,  # value of the loss to stop, check with attribute
@@ -135,7 +135,16 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     }
 
     ray.init()
+    pbt = PopulationBasedTraining(
+        time_attr="training_iteration",
+        reward_attr="accuracy",
+        perturbation_interval=5,
+        hyperparam_mutations={
+            "lr": lambda: np.random.uniform(0, 1),
+        })
 
+    run_experiments({"pbt_estimator": train_spec}, scheduler=pbt)
+"""
     ### start of train? can we split this up?
     # actually train
     with ExitStack() as stack:
@@ -198,7 +207,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         experiment.log_asset_data(metadata, file_name="metadata.json")
 
     result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, local_mode)
-    return result
+    return result"""
 
 class MyTrainableEstimator(Trainable):
     """
@@ -218,28 +227,36 @@ class MyTrainableEstimator(Trainable):
         :param config:
         :return:
         """
-        
+        from object_detection.protos import pipeline_pb2
+        import tensorflow as tf
+        from object_detection import model_lib
+        from pathlib import Path
         # copy hyperparameters into self.config
         self.config = config
-        
-        
+        base_dir  = self.config['base_dir']
         ###add comet config later
-        base_dir = self.config['base_dir']
         self.base_pipeline_config_path = self.config['base_pipeline']
         
         # create models, model, eval, and train folders
         self.model_folder = base_dir / 'models' / datetime.datetime.now().strftime("%d_%b_%Y_%I_%M_%S_%f%p")
         eval_folder = self.model_folder / 'eval'
         train_folder = self.model_folder / 'train'
-        os.makedirs(model_folder)
+        os.makedirs(self.model_folder)
         os.makedirs(eval_folder)
         os.makedirs(train_folder)
         self.pipeline_config_path = os.path.join(self.model_folder, 'pipeline.config')
         
-        # read base pipeline
-        with open(self.base_pipeline_config_path) as template:
-            pipeline_contents = template.read()
-        # 
+        
+        base_config = pipeline_pb2.TrainEvalPipelineConfig()
+       
+        with tf.gfile.GFile(self.base_pipeline_config_path, "r") as f:
+            proto_str = f.read()
+            text_format.Merge(proto_str, base_config) 
+
+        base_config.train_config.fine_tune_checkpoint = str(self.model_folder / 'train'/ 'model.ckpt')
+        base_config.train_config.optimizer.rms_prop_optimizer.learning_rate.exponential_decay_learning_rate.initial_learning_rate = self.config['lr']
+        pipeline_contents = text_format.MessageToString(base_config)
+
         # output final configuation file for training
         with open(self.model_folder / 'pipeline.config', 'w') as file:
             file.write(pipeline_contents)
@@ -260,7 +277,7 @@ class MyTrainableEstimator(Trainable):
             run_config=run_config,
             sample_1_of_n_eval_examples=1,
             hparams=model_hparams.create_hparams(None),
-            pipeline_config_path=pipeline_config_path,
+            pipeline_config_path=self.pipeline_config_path,
             train_steps=self.training_steps)
     
         self.estimator = train_and_eval_dict['estimator']
@@ -275,10 +292,10 @@ class MyTrainableEstimator(Trainable):
             self.eval_input_fns,
             self.eval_on_train_input_fn,
             self.predict_input_fn,
-            self.train_steps,
-            self.final_exporter_name='exported_model',
+            self.training_steps,
+            final_exporter_name ='exported_model',
             eval_on_train_data=False)
-            self.steps = 0
+        self.steps = 0
 
     def _train(self):
         # Run your training op for n iterations
@@ -412,7 +429,8 @@ def _import_od():
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
     _dynamic_import('object_detection.model_lib', 'model_lib')
     _dynamic_import('object_detection.exporter', 'exporter')
-    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
+    _dynamic_import('object_detection.protos', 'pipeline_pb2')
+    # _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
