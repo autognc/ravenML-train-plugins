@@ -9,7 +9,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from comet_ml import Experiment
+# from comet_ml import Experiment
 import os
 import click 
 import io
@@ -18,6 +18,7 @@ import yaml
 import importlib
 import re
 import glob
+import shutil
 from contextlib import ExitStack
 import traceback
 from pathlib import Path
@@ -126,7 +127,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         "config": {
             "lr": grid_search([10 ** -2, 10 ** -5]),
             "base_dir": base_dir,
-            "base_pipeline": pipeline_config_path
+            "base_pipeline": pipeline_config_path,
+            "arch_path": arch_path,
+            "cur_dir" : Path(os.path.dirname(os.path.abspath(__file__)))
         },
         "num_samples": 10,
         'local_dir': models_dir,
@@ -227,11 +230,10 @@ class MyTrainableEstimator(Trainable):
         :param config:
         :return:
         """
-        from object_detection.protos import pipeline_pb2
-        import tensorflow as tf
-        from object_detection import model_lib
+        
+        #### not sure why these libraries have to be reimported 
+        cli_spinner("Importing TensorFlow...", _import_od)
         from pathlib import Path
-        # copy hyperparameters into self.config
         self.config = config
         base_dir  = self.config['base_dir']
         ###add comet config later
@@ -249,7 +251,7 @@ class MyTrainableEstimator(Trainable):
         
         base_config = pipeline_pb2.TrainEvalPipelineConfig()
        
-        with tf.gfile.GFile(self.base_pipeline_config_path, "r") as f:
+        with tf.io.gfile.GFile(self.base_pipeline_config_path, "r") as f:
             proto_str = f.read()
             text_format.Merge(proto_str, base_config) 
 
@@ -260,7 +262,29 @@ class MyTrainableEstimator(Trainable):
         # output final configuation file for training
         with open(self.model_folder / 'pipeline.config', 'w') as file:
             file.write(pipeline_contents)
-        
+            # copy model checkpoints to our train folder
+        checkpoint_folder = self.config['arch_path']
+        checkpoint0_folder = self.config['cur_dir'] /'utils' / 'checkpoint_0'
+        file1 = checkpoint_folder / 'model.ckpt.data-00000-of-00001'
+        file2 = checkpoint_folder / 'model.ckpt.index'
+        file3 = checkpoint_folder / 'model.ckpt.meta'
+        file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
+        file5 = checkpoint0_folder / 'model.ckpt-0.index'
+        file6 = checkpoint0_folder / 'model.ckpt-0.meta'
+        shutil.copy2(file1, train_folder)
+        shutil.copy2(file2, train_folder)
+        shutil.copy2(file3, train_folder)
+        shutil.copy2(file4, train_folder)
+        shutil.copy2(file5, train_folder)
+        shutil.copy2(file6, train_folder)
+    
+        # load starting checkpoint template and insert training directory path
+        checkpoint_file = checkpoint0_folder / 'checkpoint'
+        with open(checkpoint_file) as cf:
+            checkpoint_contents = cf.read()
+        checkpoint_contents = checkpoint_contents.replace('<replace>', str(train_folder))
+        with open(train_folder / 'checkpoint', 'w') as new_cf:
+            new_cf.write(checkpoint_contents)
         ####does this need to be different for each
         self.training_steps = 1000
         
@@ -319,6 +343,27 @@ class MyTrainableEstimator(Trainable):
 
     def _stop(self):
         self.estimator = None
+
+    def _save(self, checkpoint_dir):
+        """
+         This function will be called if a population member is good enough to be exploited
+        :param checkpoint_dir:
+        :return:
+        """
+        lastest_checkpoint = self.estimator.latest_checkpoint()
+        # lastest_checkpoint = tf.contrib.training.wait_for_new_checkpoint(
+        #    checkpoint_dir=self.model_dir_full,
+        #    last_checkpoint=self.estimator.latest_checkpoint(),
+        #    seconds_to_sleep=0.01,
+        #    timeout=60
+        # )
+        #
+        tf.logging.info('Saving checkpoint {} for tune'.format(lastest_checkpoint))
+        f = open(checkpoint_dir + '/path.txt', 'w')
+        f.write(lastest_checkpoint)
+        f.flush()
+        f.close()
+        return checkpoint_dir + '/path.txt'
 
 ### HELPERS ###
 def _get_paths_for_extra_files(artifact_path: Path):
@@ -429,8 +474,8 @@ def _import_od():
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
     _dynamic_import('object_detection.model_lib', 'model_lib')
     _dynamic_import('object_detection.exporter', 'exporter')
-    _dynamic_import('object_detection.protos', 'pipeline_pb2')
-    # _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
+    #_dynamic_import('object_detection.protos', 'pipeline_pb2')
+    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function
     sys.stdout = sys.__stdout__
