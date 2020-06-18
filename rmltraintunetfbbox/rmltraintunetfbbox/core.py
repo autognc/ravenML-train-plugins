@@ -119,6 +119,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         "run": MyTrainableEstimator,
         "resources_per_trial": {
             "cpu": 5,
+            "gpu": 1
         },
         "stop": {
             "accuracy": 1.0,  # value of the loss to stop, check with attribute
@@ -333,11 +334,12 @@ class MyTrainableEstimator(Trainable):
         # from start point which might cause overfitting for big data models. CheckpointInputPipelineHook(...) use
         # self.run_config.save_checkpoints_secs or save_checkpoints_steps to save iterator. for more control over
         # saving read more: https://www.tensorflow.org/api_docs/python/tf/contrib/data/CheckpointInputPipelineHook
-        self.datahook = CheckpointInputPipelineHook(self.estimator)
+        # self.datahook = CheckpointInputPipelineHook(self.estimator)
         # training
-        self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps, hooks=[self.datahook])
+        # self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps, hooks=[self.datahook])
+        #self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps, hooks=[self.datahook])
         # evaluation
-        metrics = self.estimator.evaluate(input_fn=self.input_fn_eval)
+        metrics = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
         self.steps = self.steps + self.training_steps
         return metrics
 
