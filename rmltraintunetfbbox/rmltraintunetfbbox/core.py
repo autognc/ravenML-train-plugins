@@ -119,7 +119,6 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         "run": MyTrainableEstimator,
         "resources_per_trial": {
             "cpu": 5,
-            "gpu": 1
         },
         "stop": {
             "accuracy": 1.0,  # value of the loss to stop, check with attribute
@@ -336,10 +335,7 @@ class MyTrainableEstimator(Trainable):
         # saving read more: https://www.tensorflow.org/api_docs/python/tf/contrib/data/CheckpointInputPipelineHook
         # self.datahook = CheckpointInputPipelineHook(self.estimator)
         # training
-        # self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps, hooks=[self.datahook])
-        #self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps, hooks=[self.datahook])
-        # evaluation
-        metrics = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
+        tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
         self.steps = self.steps + self.training_steps
         return metrics
 
