@@ -27,7 +27,7 @@ from ravenml.options import verbose_opt
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
-from ravenml.utils.plugins import fill_basic_training_metadata, raise_option_error
+from ravenml.utils.plugins import fill_basic_training_metadata, raise_parameter_error
 from rmltraintfbbox.options import option_decorator
 from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch
 import rmltraintfbbox.validation.utils as utils
@@ -49,7 +49,6 @@ def tf_bbox(ctx):
     pass
     
 @tf_bbox.command(help='Train a model.')
-# @option_decorator
 @pass_train
 @click.pass_context
 # def train(ctx: click.Context, 
@@ -71,23 +70,19 @@ def train(ctx: click.Context, train: TrainInput):
     # NOTE: after training, you must create an instance of TrainOutput and return it
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
-    if verbose:
+
+    ## SET UP CONFIG ##
+    config = train.plugin_config
+    metadata = train.plugin_metadata
+    comet = config.get('comet')
+
+    # return TrainOutput({}, '', Path(''), [])
+    
+    if config['verbose']:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
-
-    ## SET UP CONFIG ##
     
-
-
-
-
-    return TrainOutput({}, '', Path(''), [])
-    
-    # create training metadata dict and populate with basic information
-    metadata = {}
-    fill_basic_training_metadata(metadata, train.dataset, author=author, comments=comments)
-
     # set base directory for model artifacts 
     base_dir = train.artifact_path
  
@@ -99,26 +94,27 @@ def train(ctx: click.Context, train: TrainInput):
         except yaml.YAMLError as exc:
             print(exc)
     
-    # prompt for model selection
+    # prompt for model selection if not in config
+    model_name = config.get('model')
     model_name = model_name if model_name else user_selects('Choose model', models.keys())
     # grab fields and add to metadata
     try:
         model = models[model_name]
     except KeyError as e:
         hint = 'model name, model is not supported by this plugin.'
-        raise_option_error(model_name, hint)
+        raise_parameter_error(model_name, hint)
     
     # extract information and add to metadata
     model_type = model['type']
     model_url = model['url']
-    metadata['architecture'] = model_name
+    train.plugin_metadata['architecture'] = model_name
     
     # download model arch
     arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
-    if not prepare_for_training(train.plugin_cache, base_dir, train.dataset.path, 
-        arch_path, model_type, metadata, optimizer, use_default_config, hyperparameters):
+    if not prepare_for_training(train.plugin_cache, train.artifact_path, train.dataset.path, 
+        arch_path, model_type, train.plugin_metadata, train.plugin_config):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
@@ -179,6 +175,7 @@ def train(ctx: click.Context, train: TrainInput):
     if comet:
         experiment.log_asset(model_path)
 
+    # TODO: make evaluation optional
     try:
         click.echo("Evaluating model...")
         with ExitStack() as stack:
@@ -221,7 +218,7 @@ def train(ctx: click.Context, train: TrainInput):
     if comet:
         experiment.log_asset_data(metadata, file_name="metadata.json")
 
-    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files)
+    result = TrainOutput(train.metadata, base_dir, Path(model_path), extra_files)
     return result
     
 
@@ -286,7 +283,6 @@ def _get_paths_for_extra_files(artifact_path: Path):
 
     extras.append(labels_path)
     return extras, frozen_graph_path
-
 
 def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
     """Exports frozen inference graph from model checkpoints
