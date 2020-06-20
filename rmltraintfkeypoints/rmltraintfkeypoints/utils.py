@@ -55,7 +55,7 @@ def dataset_from_directory(dir_path, cropsize):
     return tf.data.Dataset.from_generator(generator, (tf.float32, dtypes))
 
 
-def yield_eval_batches(dataset_path, model_path, keypoints_scale, batch_size=32):
+def yield_eval_batches(dataset_path, model_path, batch_size=32):
     model = tf.keras.models.load_model(model_path)
     cropsize = model.input.shape[1]
     nb_keypoints = model.output.shape[1] // 2
@@ -72,19 +72,20 @@ def yield_eval_batches(dataset_path, model_path, keypoints_scale, batch_size=32)
         n = len(image_batch)
         pose_batch = metadata['pose']
         bbox_batch = metadata['bboxes']['cygnus']
-        kps_pred = model.predict(image_batch)
-        kps_actual = np.empty_like(kps_pred)
+        kps_pred = model.predict(image_batch).reshape(-1, nb_keypoints, 2)
+        kps_truth = np.empty_like(kps_pred)
+        kps = np.empty_like(kps_pred)
         for i in range(n):
             bbox = {key: value[i] for key, value in bbox_batch.items()}
             bbox_size = max(bbox['ymax'] - bbox['ymin'], bbox['xmax'] - bbox['xmin']) * 1.25
             centroid = [(bbox['ymax'] + bbox['ymin']) / 2, (bbox['xmax'] + bbox['xmin']) / 2]
-            pose = pose_batch[i]
-            kps_actual[i] = KeypointsModel.preprocess_keypoints(
-                metadata['keypoints'][i].reshape((-1,)), 
-                centroid, bbox_size, cropsize, (1024, 1024), 128
-            ).numpy()[:nb_keypoints * 2]
-        kps = ((kps_pred * (keypoints_scale // 2)) + keypoints_scale // 2).reshape((-1, nb_keypoints, 2))
-        kps_truth = ((kps_actual * (keypoints_scale // 2)) + keypoints_scale // 2).reshape((-1, nb_keypoints, 2))
+            # pose = pose_batch[i]
+            kps_truth[i] = metadata['keypoints'][i][:nb_keypoints] * 1024
+            kps[i] = (kps_pred[i] * (bbox_size // 2) + np.array(centroid))
+            # kps_truth[i] = KeypointsModel.preprocess_keypoints(
+                # metadata['keypoints'][i].reshape((-1,)),
+                # centroid, bbox_size, cropsize, (1024, 1024), 128
+                # ).numpy()[:nb_keypoints * 2]
         images = ((image_batch + 1) / 2 * 255).astype(np.uint8)
         yield ref_points, pose_batch, images, kps, kps_truth
 
@@ -95,22 +96,19 @@ def yield_meta_examples(dataset_path, crop_size, batch_size=32):
     ref_points = np.load(dataset_path / "keypoints.npy").reshape((-1, 3))
     for image_batch, metadata_batch in tqdm.tqdm(test_data.as_numpy_iterator()):
         images = ((image_batch + 1) / 2 * 255).astype(np.uint8)
-        batch_bboxes = metadata_batch['bboxes']['cygnus']
+        # batch_bboxes = metadata_batch['bboxes']['cygnus']
         n = len(image_batch)
         for i in range(n):
             image = images[i]
-            bbox = {key: value[i] for key, value in batch_bboxes.items()}
-            bbox_size = max(bbox['ymax'] - bbox['ymin'], bbox['xmax'] - bbox['xmin']) * 1.25
-            centroid = [(bbox['ymax'] + bbox['ymin']) / 2, (bbox['xmax'] + bbox['xmin']) / 2]
+            # bbox = {key: value[i] for key, value in batch_bboxes.items()}
+            # bbox_size = max(bbox['ymax'] - bbox['ymin'], bbox['xmax'] - bbox['xmin']) * 1.25
+            # centroid = [(bbox['ymax'] + bbox['ymin']) / 2, (bbox['xmax'] + bbox['xmin']) / 2]
             pose = metadata_batch['pose'][i]
-            kps = KeypointsModel.preprocess_keypoints(
-                metadata_batch['keypoints'][i].reshape((-1,)), 
-                centroid, bbox_size, crop_size, (1024, 1024), 128
-            ).numpy().reshape((-1, 2))
+            kps = metadata_batch['keypoints'][i] * 1024
             yield image, ref_points, kps, pose
 
 
-def calculate_pose_vectors(referance_points, keypoints, focal_length, image_size):
+def calculate_pose_vectors(ref_points, keypoints, focal_length, image_size):
     dist_coeffs = np.zeros((5, 1), dtype=np.float32)
     cam_matrix = np.array([
         [focal_length, 0, image_size // 2],
@@ -118,19 +116,29 @@ def calculate_pose_vectors(referance_points, keypoints, focal_length, image_size
         [0, 0, 1]
     ], dtype=np.float32)
     ret, r_vec, t_vec = cv2.solvePnP(
-        referance_points, keypoints,
+        ref_points, keypoints,
         cam_matrix, dist_coeffs)
     assert ret, 'Pose solve failed.'
     return r_vec, t_vec, cam_matrix, dist_coeffs
 
 
-def rvec_geodesic_error(r_vec, pose_quat):
-    r_pred = Rotation.from_rotvec(r_vec.squeeze())
-    w, x, y, z = pose_quat
-    r_truth = Rotation.from_quat([x, y, z, w])
+def to_rotation(r):
+    if isinstance(r, Rotation):
+        return r
+    r = np.array(r).squeeze()
+    if len(r) == 3:
+        return Rotation.from_rotvec(r)
+    if len(r) == 4:
+        w, x, y, z = r
+        return Rotation.from_quat([x, y, z, w])
+    raise ValueError()
+
+
+def geodesic_error(r1, r2):
+    r1, r2 = to_rotation(r1), to_rotation(r2)
     return min(
-        geodesic_error(_adj_rotation_z(r_pred, 90), r_truth), 
-        geodesic_error(_adj_rotation_z(r_pred, -90), r_truth))
+        _quat_geodesic_error(_adj_rotation_z(r1, 90).as_quat(), r2.as_quat()),
+        _quat_geodesic_error(_adj_rotation_z(r1, -90).as_quat(), r2.as_quat()))
 
 
 def _adj_rotation_z(rot, degs):
@@ -138,8 +146,6 @@ def _adj_rotation_z(rot, degs):
     return Rotation.from_euler('xyz', [x, y, z + degs], degrees=True)
 
 
-def geodesic_error(r1, r2):
-    q1 = r1.as_quat()
-    q2 = r2.as_quat()
+def _quat_geodesic_error(q1, q2):
     dot = np.abs(np.sum(q1 * q2))
     return 2 * np.arccos(np.clip(dot, 0, 1))
