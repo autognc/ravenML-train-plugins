@@ -73,7 +73,6 @@ def train(ctx, train: TrainInput, config, comet):
         experiment.log_parameters(hyperparameters)
         experiment.set_os_packages()
         experiment.set_pip_packages()
-        experiment.set_code()
         experiment.log_asset_data(metadata, name='metadata.json')
 
     # run training

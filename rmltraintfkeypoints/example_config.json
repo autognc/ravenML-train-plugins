@@ -10,8 +10,9 @@
   "shuffle_buffer_size": 8192,
   "model_arch": "densenet",
   "model_init_weights": "imagenet",
+  "model_unet_params": {},
   "optimizer": "Adam",
   "optimizer_args": {"lr": 0.001},
   "pnp_focal_length": 1422,
-  "pnp_crop_size": 1024
+  "pnp_crop_size": 1024,
 }

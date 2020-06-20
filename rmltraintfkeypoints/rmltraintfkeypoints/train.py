@@ -21,6 +21,8 @@ class KeypointsModel:
         self.hp = hp
         self.keypoints_3d = keypoints_3d
         self.nb_keypoints = hp['keypoints']
+        self.crop_size = hp['crop_size']
+        self.crop_size_rounded = int(2**round(np.log2(hp['crop_size'])))
 
     def _get_dataset(self, split_name, train):
         """
@@ -53,7 +55,10 @@ class KeypointsModel:
                 tf.io.FixedLenFeature([4], tf.float32)
         }
 
-        cropsize = self.hp['crop_size']
+        if self.hp['model_arch'] in ['unet']:
+            cropsize = self.crop_size_rounded
+        else:
+            cropsize = self.crop_size
 
         def _parse_function(example):
             parsed = tf.io.parse_single_example(example, features)
@@ -136,7 +141,10 @@ class KeypointsModel:
             )
         ]
 
-        model = self._gen_model()
+        model = {
+            'densenet': self._gen_model_densenet,
+            'unet': self._get_custom_unet
+        }[self.hp['model_arch']]()
         print(model.summary())
 
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](**self.hp['optimizer_args'])
@@ -157,26 +165,58 @@ class KeypointsModel:
 
         return model_path
 
-    def _gen_model(self):
-        # TODO support more options
-        assert self.hp['model_arch'] == 'densenet'
+    def _gen_model_densenet(self):
         assert self.hp['model_init_weights'] == 'imagenet'
-
         keras_app_args = dict(
             include_top=False, weights='imagenet', 
-            input_shape=(self.hp['crop_size'], self.hp['crop_size'], 3), 
+            input_shape=(self.crop_size, self.crop_size, 3), 
             pooling='max'
         )
         keras_app_model = tf.keras.applications.densenet.DenseNet121(**keras_app_args)
-
         app_in = keras_app_model.input
         app_out = keras_app_model.output
         x = app_out
         for i in range(self.hp['fc_count']):
             x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
-
         return tf.keras.models.Model(app_in, x)
+
+
+    def _get_custom_unet(self):
+        from keras_unet.models import custom_unet
+        assert not self.hp.get('model_init_weights')
+        unet_decoder_method = self.hp.get('model_unet_decoder', 'maxpool')
+        unet_decoder_params = self.hp.get('model_unet_decoder_params')
+        unet_params = dict(
+            input_shape=(self.crop_size_rounded, self.crop_size_rounded, 3),
+            use_batch_norm=False,
+            num_classes=1,
+            num_layers=4,
+            activation='relu',
+            filters=16,
+            use_attention=False,
+            upsample_mode='deconv',
+            dropout=0.3,
+            output_activation='linear'
+        )
+        unet_params.update(self.hp.get('model_unet_params', {}))
+        unet_model = custom_unet(**unet_params)
+
+        # Convert UNet 3d output to keypoints
+        unet_in = unet_model.input
+        unet_out = unet_model.output
+        x = unet_out
+        if unet_decoder_method == 'maxpool':
+            if unet_decoder_params is None:
+                pool_size = (4, 4)
+            else:
+                pool_size = unet_decoder_params
+            x = tf.keras.layers.MaxPooling2D(pool_size)(x)
+        x = tf.keras.layers.Flatten()(x)
+        for i in range(self.hp['fc_count']):
+            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
+        x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
+        return tf.keras.models.Model(unet_in, x)
 
     @staticmethod
     def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints):
