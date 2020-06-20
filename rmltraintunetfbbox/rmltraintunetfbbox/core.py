@@ -118,7 +118,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     train_spec = {
         "run": MyTrainableEstimator,
         "resources_per_trial": {
-            "cpu": 5,
+            "gpu": 1,
         },
         "stop": {
             "accuracy": 1.0,  # value of the loss to stop, check with attribute
@@ -131,7 +131,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             "arch_path": arch_path,
             "cur_dir" : Path(os.path.dirname(os.path.abspath(__file__)))
         },
-        "num_samples": 10,
+        "num_samples": 1,
         'local_dir': models_dir,
         'checkpoint_at_end': True
 
@@ -287,7 +287,7 @@ class MyTrainableEstimator(Trainable):
         # saving read more: https://www.tensorflow.org/api_docs/python/tf/contrib/data/CheckpointInputPipelineHook
         # self.datahook = CheckpointInputPipelineHook(self.estimator)
         # training
-        tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
+        metrics, export_results = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
         self.steps = self.steps + self.training_steps
         return metrics
 
