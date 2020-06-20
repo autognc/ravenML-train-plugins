@@ -148,6 +148,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
 
     run_experiments({"pbt_estimator": train_spec}, scheduler=pbt)
 """
+
     ### start of train? can we split this up?
     # actually train
     with ExitStack() as stack:
@@ -235,56 +236,7 @@ class MyTrainableEstimator(Trainable):
         cli_spinner("Importing TensorFlow...", _import_od)
         from pathlib import Path
         self.config = config
-        base_dir  = self.config['base_dir']
-        ###add comet config later
-        self.base_pipeline_config_path = self.config['base_pipeline']
-        
-        # create models, model, eval, and train folders
-        self.model_folder = base_dir / 'models' / datetime.datetime.now().strftime("%d_%b_%Y_%I_%M_%S_%f%p")
-        eval_folder = self.model_folder / 'eval'
-        train_folder = self.model_folder / 'train'
-        os.makedirs(self.model_folder)
-        os.makedirs(eval_folder)
-        os.makedirs(train_folder)
-        self.pipeline_config_path = os.path.join(self.model_folder, 'pipeline.config')
-        
-        
-        base_config = pipeline_pb2.TrainEvalPipelineConfig()
-       
-        with tf.io.gfile.GFile(self.base_pipeline_config_path, "r") as f:
-            proto_str = f.read()
-            text_format.Merge(proto_str, base_config) 
-
-        base_config.train_config.fine_tune_checkpoint = str(self.model_folder / 'train'/ 'model.ckpt')
-        base_config.train_config.optimizer.rms_prop_optimizer.learning_rate.exponential_decay_learning_rate.initial_learning_rate = self.config['lr']
-        pipeline_contents = text_format.MessageToString(base_config)
-
-        # output final configuation file for training
-        with open(self.model_folder / 'pipeline.config', 'w') as file:
-            file.write(pipeline_contents)
-            # copy model checkpoints to our train folder
-        checkpoint_folder = self.config['arch_path']
-        checkpoint0_folder = self.config['cur_dir'] /'utils' / 'checkpoint_0'
-        file1 = checkpoint_folder / 'model.ckpt.data-00000-of-00001'
-        file2 = checkpoint_folder / 'model.ckpt.index'
-        file3 = checkpoint_folder / 'model.ckpt.meta'
-        file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
-        file5 = checkpoint0_folder / 'model.ckpt-0.index'
-        file6 = checkpoint0_folder / 'model.ckpt-0.meta'
-        shutil.copy2(file1, train_folder)
-        shutil.copy2(file2, train_folder)
-        shutil.copy2(file3, train_folder)
-        shutil.copy2(file4, train_folder)
-        shutil.copy2(file5, train_folder)
-        shutil.copy2(file6, train_folder)
-    
-        # load starting checkpoint template and insert training directory path
-        checkpoint_file = checkpoint0_folder / 'checkpoint'
-        with open(checkpoint_file) as cf:
-            checkpoint_contents = cf.read()
-        checkpoint_contents = checkpoint_contents.replace('<replace>', str(train_folder))
-        with open(train_folder / 'checkpoint', 'w') as new_cf:
-            new_cf.write(checkpoint_contents)
+        self._setup_dirs()
         ####does this need to be different for each
         self.training_steps = 1000
         
@@ -362,7 +314,59 @@ class MyTrainableEstimator(Trainable):
         f.flush()
         f.close()
         return checkpoint_dir + '/path.txt'
+        
+    def _setup_dirs(self):
+        
+        base_dir  = self.config['base_dir']
+        ###add comet config later
+        self.base_pipeline_config_path = self.config['base_pipeline']
+        unique_time = datetime.datetime.now().strftime("%d_%b_%Y_%I_%M_%S_%f%p")
+        # create models, model, eval, and train folders
+        self.model_folder = base_dir / 'models' / unique_time
+        eval_folder = self.model_folder / 'eval'
+        train_folder = self.model_folder / 'train'
+        os.makedirs(self.model_folder)
+        os.makedirs(eval_folder)
+        os.makedirs(train_folder)
+        self.pipeline_config_path = os.path.join(self.model_folder, 'pipeline.config')
+        
+        ### need a better way to do this. reading pipeline file this way:
+        ### https://stackoverflow.com/questions/55323907/dynamically-editing-pipeline-config-for-tensorflow-object-detection
+        ### splits anchorboxes for some reason
+        shutil.copy2(self.base_pipeline_config_path, self.model_folder)
+        with open(self.pipeline_config_path) as template:
+            pipeline_contents = template.read()
 
+        pipeline_contents = pipeline_contents.replace( 'model/train/model.ckpt', str(unique_time + '/train/model.ckpt'))
+        pipeline_contents = pipeline_contents.replace( 'initial_learning_rate: 0.0004', str('initial_learning_rate: '  + str(self.config['lr'])))
+
+        with open(self.pipeline_config_path, 'w') as file:
+            file.write(pipeline_contents)
+        
+        # copy model checkpoints to our train folder
+        checkpoint_folder = self.config['arch_path']
+        checkpoint0_folder = self.config['cur_dir'] /'utils' / 'checkpoint_0'
+        file1 = checkpoint_folder / 'model.ckpt.data-00000-of-00001'
+        file2 = checkpoint_folder / 'model.ckpt.index'
+        file3 = checkpoint_folder / 'model.ckpt.meta'
+        file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
+        file5 = checkpoint0_folder / 'model.ckpt-0.index'
+        file6 = checkpoint0_folder / 'model.ckpt-0.meta'
+        shutil.copy2(file1, train_folder)
+        shutil.copy2(file2, train_folder)
+        shutil.copy2(file3, train_folder)
+        shutil.copy2(file4, train_folder)
+        shutil.copy2(file5, train_folder)
+        shutil.copy2(file6, train_folder)
+    
+        # load starting checkpoint template and insert training directory path
+        checkpoint_file = checkpoint0_folder / 'checkpoint'
+        with open(checkpoint_file) as cf:
+            checkpoint_contents = cf.read()
+        checkpoint_contents = checkpoint_contents.replace('<replace>', str(train_folder))
+        with open(train_folder / 'checkpoint', 'w') as new_cf:
+            new_cf.write(checkpoint_contents)
+        
 ### HELPERS ###
 def _get_paths_for_extra_files(artifact_path: Path):
     """Returns the filepaths for all checkpoint, config, and pbtxt (label)
