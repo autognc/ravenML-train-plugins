@@ -142,6 +142,7 @@ class KeypointsModel:
         ]
 
         model = {
+            'mobilenet': self._gen_model_mobilenet,
             'densenet': self._gen_model_densenet,
             'unet': self._get_custom_unet
         }[self.hp['model_arch']]()
@@ -165,10 +166,28 @@ class KeypointsModel:
 
         return model_path
 
-    def _gen_model_densenet(self):
-        assert self.hp['model_init_weights'] == 'imagenet'
+    def _gen_model_mobilenet(self):
+        init_weights = self.hp.get('model_init_weights', '')
+        assert init_weights in ['imagenet', '']
         keras_app_args = dict(
-            include_top=False, weights='imagenet', 
+            include_top=False, weights=init_weights if init_weights != '' else None, 
+            input_shape=(self.crop_size, self.crop_size, 3), 
+            pooling='max'
+        )
+        keras_app_model = tf.keras.applications.MobileNetV2(**keras_app_args)
+        app_in = keras_app_model.input
+        app_out = keras_app_model.output
+        x = app_out
+        for i in range(self.hp['fc_count']):
+            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
+        x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
+        return tf.keras.models.Model(app_in, x)
+
+    def _gen_model_densenet(self):
+        init_weights = self.hp.get('model_init_weights', '')
+        assert init_weights in ['imagenet', '']
+        keras_app_args = dict(
+            include_top=False, weights=init_weights if init_weights != '' else None, 
             input_shape=(self.crop_size, self.crop_size, 3), 
             pooling='max'
         )
@@ -180,7 +199,6 @@ class KeypointsModel:
             x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
         return tf.keras.models.Model(app_in, x)
-
 
     def _get_custom_unet(self):
         from keras_unet.models import custom_unet
@@ -212,10 +230,12 @@ class KeypointsModel:
             else:
                 pool_size = unet_decoder_params
             x = tf.keras.layers.MaxPooling2D(pool_size)(x)
-        x = tf.keras.layers.Flatten()(x)
-        for i in range(self.hp['fc_count']):
-            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
-        x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
+            x = tf.keras.layers.Flatten()(x)
+            for i in range(self.hp['fc_count']):
+                x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
+            x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
+        else:
+            raise ValueError('Unsupported UNet decoder method.')
         return tf.keras.models.Model(unet_in, x)
 
     @staticmethod
