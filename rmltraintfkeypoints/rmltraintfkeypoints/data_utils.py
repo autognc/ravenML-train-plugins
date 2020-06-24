@@ -57,7 +57,8 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints):
             'keypoints': keypoints,
             'pose': tf.ensure_shape(metadata['pose'], [4]),
             'bbox_size': tf.ensure_shape(bbox_size, []),
-            'centroid': tf.ensure_shape(centroid, [2])
+            'centroid': tf.ensure_shape(centroid, [2]),
+            'imdims': imdims
         }
         return image, truth
 

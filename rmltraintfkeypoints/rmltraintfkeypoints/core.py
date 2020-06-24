@@ -41,7 +41,7 @@ def train(ctx, train: TrainInput, config, comet):
 
     # set base directory for model artifacts
     artifact_dir = (LocalCache(global_cache.path / 'tf-keypoints').path if train.artifact_path is None \
-        else train.artifact_path) / 'artifacts'
+                        else train.artifact_path) / 'artifacts'
 
     if os.path.exists(artifact_dir):
         if user_confirms('Artifact storage location contains old data. Overwrite?'):
@@ -130,25 +130,29 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     for image_batch, truth_batch in tqdm.tqdm(test_data):
         kps_batch = model(image_batch).numpy()
         kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
-        # kps_pnp_batch = kps_batch * (truth_batch['bbox_size'] // 2)[:, None, None] + truth_batch['centroid'][:, None, :]
-        kps_crop_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
+        kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         kps_true_batch = (truth_batch['keypoints'] - truth_batch['centroid'][:, None, :])\
             / truth_batch['bbox_size'][:, None, None] * cropsize + (cropsize // 2)
-        rescale_batch = cropsize / truth_batch['bbox_size']
-        for image, rescale, kps_crop, kps_true, pose in zip(image_batch.numpy(), rescale_batch.numpy(), kps_crop_batch,
-                                                            kps_true_batch.numpy(), truth_batch['pose'].numpy()):
-            image = ((image + 1) / 2 * 255).astype(np.uint8)
+        for i, (kps, kps_true) in enumerate(zip(kps_batch, kps_true_batch.numpy())):
+            image = ((image_batch[i].numpy() + 1) / 2 * 255).astype(np.uint8)
             r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
-                ref_points, kps_crop,
-                pnp_focal_length, image.shape[:2],
-                rescale=rescale
+                ref_points, kps,
+                [pnp_focal_length, pnp_focal_length], image.shape[:2],
+                extra_crop_params={
+                    'centroid': truth_batch['centroid'][i],
+                    'bbox_size': truth_batch['bbox_size'][i],
+                    'imdims': truth_batch['imdims'][i],
+                }
             )
-            errs.append(utils.geodesic_error(r_vec, pose))
-            errs_by_keypoint.append([np.linalg.norm(kps_true[i] - kps_crop[i]) for i in range(len(kps_crop))])
+            errs.append(utils.geodesic_error(r_vec, truth_batch['pose'][i]))
+            errs_by_keypoint.append([
+                np.linalg.norm(kp_true - kp)
+                for kp, kp_true in zip(kps, kps_true)
+            ])
             if render_poses:
-                for kp_idx in range(len(kps_crop)):
-                    y = int(kps_crop[kp_idx, 0])
-                    x = int(kps_crop[kp_idx, 1])
+                for kp_idx in range(len(kps)):
+                    y = int(kps[kp_idx, 0])
+                    x = int(kps[kp_idx, 1])
                     ay = int(kps_true[kp_idx, 0])
                     ax = int(kps_true[kp_idx, 1])
                     cv2.circle(image, (x, y), 5, (255, 0, 255), -1)
@@ -165,7 +169,8 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
                 cv2.line(image, (p3[0], p3[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p1[0], p1[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p2[0], p2[1]), (p4[0], p4[1]), (255, 0, 255), 6)
-                cv2.imwrite(f'{train.artifact_path}/pose-render-{img_cnt:04d}.png', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(f'{train.artifact_path}/pose-render-{img_cnt:04d}.png',
+                            cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             img_cnt += 1
 
     np.save(f'{train.artifact_path}/pose_errs.npy', np.array(errs))
@@ -206,7 +211,7 @@ def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
         # FIXME: don't hardcode image resolution
         r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
             ref_points[:nb_keypoints], kps[:nb_keypoints],
-            pnp_focal_length, [1024, 1024])
+            [pnp_focal_length, pnp_focal_length], [1024, 1024])
         err = utils.geodesic_error(r_vec, pose)
         errs.append(err)
 

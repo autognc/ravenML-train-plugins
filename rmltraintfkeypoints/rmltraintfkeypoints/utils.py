@@ -3,18 +3,32 @@ import numpy as np
 import cv2
 
 
-def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims,
-                           rescale=1.0):
+def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None):
     """
     Calculates pose vectors using CV2's solvePNP.
+    :param ref_points: 3D reference points (Nx3 array)
+    :param keypoints: 2D image keypoints in (y, x) pixel coordinates (Nx2 array)
+    :param focal_length: original camera focal length (vertical, horizontal)
+    :param imdims: (height, width) current image dimensions
+    :param extra_crop_params: a optional dict with extra parameters that are necessary to
+        adjust for cropping and rescaling. If provided, must have the keys {'centroid', 'bbox_size', 'imdims'}
+        where 'imdims' are the original image dimensions before cropping/rescaling.
     """
     dist_coeffs = np.zeros((5, 1), dtype=np.float32)
     imdims = np.array(imdims)
-    fy, fx = imdims // 2 * rescale
-    focal_length *= rescale
+    if extra_crop_params:
+        assert extra_crop_params.keys() == {'centroid', 'bbox_size', 'imdims'}
+        original_imdims = np.array(extra_crop_params['imdims'])
+        origin = np.array(extra_crop_params['centroid']) - extra_crop_params['bbox_size'] / 2
+        center = original_imdims / 2 - origin
+        focal_length *= imdims / extra_crop_params['bbox_size']
+        center *= imdims / extra_crop_params['bbox_size']
+    else:
+        center = imdims / 2
+
     cam_matrix = np.array([
-        [focal_length, 0, fx],
-        [0, focal_length, fy],
+        [focal_length[1], 0, center[1]],
+        [0, focal_length[0], center[0]],
         [0, 0, 1]
     ], dtype=np.float32)
     keypoints = keypoints.copy()

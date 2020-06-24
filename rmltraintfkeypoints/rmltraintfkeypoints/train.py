@@ -5,15 +5,17 @@ from . import utils
 
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
-    def __init__(self, ref_points, cropsize, focal_length):
+    def __init__(self, ref_points, cropsize, focal_length, experiment=None):
         super().__init__()
         self.ref_points = ref_points
         self.crop_size = cropsize
         self.focal_length = focal_length
+        self.experiment = experiment
         self.targets = tf.Variable(0.0, shape=tf.TensorShape(None))
         self.outputs = tf.Variable(0.0, shape=tf.TensorShape(None))
         self.train_errors = []
         self.test_errors = []
+        self.comet_step = 0
 
     def assign_metric_ignore(self, y_true, y_pred):
         self.targets.assign(y_true)
@@ -25,13 +27,16 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         kps_batch = self.outputs.numpy()
         kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
         kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
-        rescale_batch = self.crop_size / label['bbox_size']
         error_batch = np.zeros(kps_batch.shape[0])
         for i, kps in enumerate(kps_batch):
             r_vec, t_vec, _, _ = utils.calculate_pose_vectors(
                 self.ref_points, kps,
-                self.focal_length, [label['height'][i], label['width'][i]],
-                rescale_batch[i]
+                [self.focal_length, self.focal_length], [self.crop_size, self.crop_size],
+                extra_crop_params={
+                    'centroid': label['centroid'][i],
+                    'bbox_size': label['bbox_size'][i],
+                    'imdims': [label['height'][i], label['width'][i]],
+                }
             )
 
             error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i].numpy())
@@ -41,18 +46,26 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         self.train_errors = []
 
     def on_train_batch_end(self, batch, logs=None):
+        self.comet_step += 1
         self.train_errors.append(np.mean(self.calc_pose_error()))
         mean = np.mean(self.train_errors)
         print(f' - pose error: {mean:.4f} ({np.degrees(mean):.2f} deg)')
+        if self.experiment:
+            self.experiment.log_metric('pose_error_deg', np.degrees(mean), step=self.comet_step)
 
     def on_test_begin(self, logs=None):
         self.test_errors = []
 
     def on_test_batch_end(self, batch, logs=None):
+        self.comet_step += 1
         self.test_errors.append(np.mean(self.calc_pose_error()))
 
     def on_test_end(self, logs=None):
-        print('Eval pose error: ', np.mean(self.test_errors))
+        mean = np.mean(self.test_errors)
+        print(f'Eval pose error: {mean:.4f} ({np.degrees(mean):.2f} deg)')
+        if self.experiment:
+            with self.experiment.validate():
+                self.experiment.log_metric('pose_error_deg', np.degrees(mean), step=self.comet_step)
 
 
 class KeypointsModel:
@@ -187,7 +200,7 @@ class KeypointsModel:
         # cv2.imwrite('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
         model_path = os.path.join(logdir, "model.h5")
-        pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'])
+        pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'], experiment)
         callbacks = [
             tf.keras.callbacks.TensorBoard(
                 log_dir=logdir,
