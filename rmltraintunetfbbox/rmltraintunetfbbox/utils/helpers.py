@@ -71,7 +71,6 @@ def prepare_for_training(base_dir: Path, data_path: Path, arch_path: Path, model
 
     except:
         num_eval_examples = 1
-
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
     # model_folder = models_folder / 'model'
