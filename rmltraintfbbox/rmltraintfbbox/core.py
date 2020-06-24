@@ -18,8 +18,9 @@ import yaml
 import importlib
 import re
 import glob
-from contextlib import ExitStack
+import json
 import traceback
+from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
 from schema import Schema, Optional
@@ -27,7 +28,7 @@ from ravenml.options import verbose_opt
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
-from ravenml.utils.plugins import fill_basic_training_metadata, raise_parameter_error
+from ravenml.utils.plugins import raise_parameter_error
 from rmltraintfbbox.options import option_decorator
 from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch
 import rmltraintfbbox.validation.utils as utils
@@ -41,7 +42,6 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 ### OPTIONS ###
 # defined in options.py for this plugin
 
-
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
 @click.pass_context
@@ -51,16 +51,6 @@ def tf_bbox(ctx):
 @tf_bbox.command(help='Train a model.')
 @pass_train
 @click.pass_context
-# def train(ctx: click.Context, 
-#             train: TrainInput, 
-#             verbose: bool, 
-#             comet: str, 
-#             author: str, 
-#             comments: str,
-#             model_name: str, 
-#             optimizer: str, 
-#             use_default_config: bool,
-#             hyperparameters: str):
 def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
@@ -73,11 +63,10 @@ def train(ctx: click.Context, train: TrainInput):
 
     ## SET UP CONFIG ##
     config = train.plugin_config
-    metadata = train.plugin_metadata
+    metadata = train.metadata[train.plugin_metadata_field]
     comet = config.get('comet')
 
-    # return TrainOutput({}, '', Path(''), [])
-    
+    # set up TF verbosity
     if config['verbose']:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
@@ -87,6 +76,7 @@ def train(ctx: click.Context, train: TrainInput):
     base_dir = train.artifact_path
  
     # load model choices from YAML
+    models = {}
     models_path = os.path.dirname(__file__) / Path('utils') / Path('model_info.yml')
     with open(models_path, 'r') as stream:
         try:
@@ -107,14 +97,14 @@ def train(ctx: click.Context, train: TrainInput):
     # extract information and add to metadata
     model_type = model['type']
     model_url = model['url']
-    train.plugin_metadata['architecture'] = model_name
+    metadata['architecture'] = model_name
     
     # download model arch
     arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(train.plugin_cache, train.artifact_path, train.dataset.path, 
-        arch_path, model_type, train.plugin_metadata, train.plugin_config):
+        arch_path, model_type, metadata, train.plugin_config):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
@@ -134,9 +124,9 @@ def train(ctx: click.Context, train: TrainInput):
     num_train_steps = metadata['hyperparameters']['train_steps']
     num_train_steps = int(num_train_steps)
 
-    config = tf.estimator.RunConfig(model_dir=model_dir)
+    tf_config = tf.estimator.RunConfig(model_dir=model_dir)
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
-        run_config=config,
+        run_config=tf_config,
         sample_1_of_n_eval_examples=1,
         hparams=model_hparams.create_hparams(None),
         pipeline_config_path=pipeline_config_path,
@@ -216,8 +206,12 @@ def train(ctx: click.Context, train: TrainInput):
         metadata['validation_error'] = traceback.format_exc()
 
     if comet:
-        experiment.log_asset_data(metadata, file_name="metadata.json")
+        experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
+    # export metadata locally
+    with open(base_dir / 'metadata.json', 'w') as f:
+        json.dump(train.metadata, f, indent=2)
+        
     result = TrainOutput(train.metadata, base_dir, Path(model_path), extra_files)
     return result
     

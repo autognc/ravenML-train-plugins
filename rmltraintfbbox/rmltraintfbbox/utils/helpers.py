@@ -20,6 +20,7 @@ from ravenml.utils.plugins import raise_parameter_error
 
 init()
 
+# TODO: update docs
 def prepare_for_training(
     bbox_cache: RMLCache,
     base_dir: Path, 
@@ -93,12 +94,12 @@ def prepare_for_training(
     
     ### PIPELINE CONFIG CREATION ###
     # grab default config for the chosen optimizer
+    default_config = {}
     try:
         default_config = defaults[optimizer_name]
     except KeyError as e:
         hint = 'optimizer name, optimizer not supported for this model architecture.'
         raise_parameter_error(optimizer_name, hint)
-        # raise click.exceptions.BadParameter(optimizer, param=optimizer_name, param_hint='name of optimizer')
     
     # create custom configuration if necessary
     user_config = default_config
@@ -164,7 +165,7 @@ def prepare_for_training(
     # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
         file.write(pipeline_contents)
-
+    
     # copy model checkpoints to our train folder
     checkpoint_folder = arch_path
     checkpoint0_folder = cur_dir / 'checkpoint_0'
