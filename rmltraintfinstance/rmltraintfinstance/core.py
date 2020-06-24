@@ -29,8 +29,8 @@ from ravenml.train.options import kfold_opt, pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
 from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input
-from ravenml.utils.plugins import fill_basic_metadata
-from rmltraintfinstance.utils.helpers import prepare_for_training, download_model_arch, instance_cache
+from ravenml.utils.plugins import raise_parameter_error
+from rmltraintfinstance.utils.helpers import prepare_for_training, download_model_arch
 import rmltraintfinstance.validation.utils as utils
 import rmltraintfinstance.validation.stats as stats
 from google.protobuf import text_format
@@ -58,13 +58,9 @@ def tf_instance(ctx):
     pass
     
 @tf_instance.command(help='Train a model.')
-@no_validate_opt
-@no_comet_opt
-@verbose_opt
-# @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bool):
+def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -73,18 +69,20 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
     # NOTE: after training, you must create an instance of TrainOutput and return it
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
-    if verbose:
+    
+    ## SET UP CONFIG ##
+    config = train.plugin_config
+    metadata = train.metadata[train.plugin_metadata_field]
+    comet = config.get('comet')
+    
+    # set up TF verbosity
+    if config['verbose']:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
-    
-    # create training metadata dict and populate with basic information
-    metadata = {}
-    fill_basic_metadata(metadata, train.dataset)
 
     # set base directory for model artifacts 
-    base_dir = instance_cache.path / 'temp' if train.artifact_path is None \
-                    else train.artifact_path
+    base_dir = train.artifact_path
  
     # load model choices from YAML
     models = {}
@@ -96,22 +94,30 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             print(exc)
     
     # prompt for model selection
-    model_name = user_selects('Choose model', models.keys())
+    model_name = config.get('model')
+    model_name = model_name if model_name else user_selects('Choose model', models.keys())
     # grab fields and add to metadata
-    model = models[model_name]
+    try:
+        model = models[model_name]
+    except KeyError as e:
+        hint = 'model name, model is not supported by this plugin.'
+        raise_parameter_error(model_name, hint)
+    
+    # extract and add to metadata
     model_type = model['type']
     model_url = model['url']
     metadata['architecture'] = model_name
     
     # download model arch
-    arch_path = download_model_arch(model_url)
+    arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
-    if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
+    if not prepare_for_training(train.plugin_cache, base_dir, train.dataset.path,
+        arch_path, model_type, metadata, train.plugin_config):
         ctx.exit('Training cancelled.')
         
     experiment = None
-    if not no_comet:
+    if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='instance-segmentation')
         name = user_input('What would you like to name the comet experiment?:')
         experiment.set_name(name)
@@ -130,9 +136,10 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
     model_dir = os.path.join(base_dir, 'models/model')
     pipeline_config_path = os.path.join(base_dir, 'models/model/pipeline.config')
 
-    config = tf.estimator.RunConfig(model_dir=model_dir)
+    tf_config = tf.estimator.RunConfig(model_dir=model_dir)
+    # NOTE: not sure what sample_1_of_n_eval_examples does, but required
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
-        run_config=config,
+        run_config=tf_config,
         hparams=model_hparams.create_hparams(None),
         pipeline_config_path=pipeline_config_path,
         train_steps=num_train_steps)
@@ -154,14 +161,14 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
         eval_on_train_data=False)
 
     with ExitStack() as stack:
-        if not no_comet:
+        if comet:
             stack.enter_context(experiment.train())
         # actually train
         progress = Spinner('Training model...', 'magenta')
-        if not verbose:
+        if not config['verbose']:
             progress.start()
         tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-        if not verbose:
+        if not config['verbose']:
             progress.succeed('Training model...Complete.')
         
     # final metadata and return of TrainOutput object
@@ -170,11 +177,10 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
     # get extra config files
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = frozen_graph_path
-    local_mode = train.artifact_path is not None
     
-    if not no_validate:
+    if not config['no_validate']:
         with ExitStack() as stack:
-            if not no_comet:
+            if comet:
                 stack.enter_context(experiment.validate())
                 
             label_path = extra_files[-1]
@@ -234,7 +240,10 @@ def train(ctx, train: TrainInput, verbose: bool, no_comet: bool, no_validate: bo
             
             experiment.log_asset(output_path / 'stats.json')
                     
-    result = TrainOutput(metadata, base_dir, model_path, extra_files, local_mode)
+    if comet:
+        experiment.log_asset_data(train.metadata, file_name="metadata.json")
+        
+    result = TrainOutput(train.metadata, base_dir, Path(model_path), extra_files)
     return result
     
 
