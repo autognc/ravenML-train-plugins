@@ -1,6 +1,58 @@
 import tensorflow as tf
 import numpy as np
 import os
+from . import utils
+
+
+class PoseErrorCallback(tf.keras.callbacks.Callback):
+    def __init__(self, ref_points, cropsize, focal_length):
+        super().__init__()
+        self.ref_points = ref_points
+        self.crop_size = cropsize
+        self.focal_length = focal_length
+        self.targets = tf.Variable(0.0, shape=tf.TensorShape(None))
+        self.outputs = tf.Variable(0.0, shape=tf.TensorShape(None))
+        self.train_errors = []
+        self.test_errors = []
+
+    def assign_metric_ignore(self, y_true, y_pred):
+        self.targets.assign(y_true)
+        self.outputs.assign(y_pred)
+        return 0
+
+    def calc_pose_error(self):
+        label = KeypointsModel.decode_label(self.targets.numpy())
+        kps_batch = self.outputs.numpy()
+        kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
+        kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
+        rescale_batch = self.crop_size / label['bbox_size']
+        error_batch = np.zeros(kps_batch.shape[0])
+        for i, kps in enumerate(kps_batch):
+            r_vec, t_vec, _, _ = utils.calculate_pose_vectors(
+                self.ref_points, kps,
+                self.focal_length, [label['height'][i], label['width'][i]],
+                rescale_batch[i]
+            )
+
+            error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i].numpy())
+        return error_batch
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.train_errors = []
+
+    def on_train_batch_end(self, batch, logs=None):
+        self.train_errors.append(np.mean(self.calc_pose_error()))
+        mean = np.mean(self.train_errors)
+        print(f' - pose error: {mean:.4f} ({np.degrees(mean):.2f} deg)')
+
+    def on_test_begin(self, logs=None):
+        self.test_errors = []
+
+    def on_test_batch_end(self, batch, logs=None):
+        self.test_errors.append(np.mean(self.calc_pose_error()))
+
+    def on_test_end(self, logs=None):
+        print('Eval pose error: ', np.mean(self.test_errors))
 
 
 class KeypointsModel:
@@ -19,8 +71,8 @@ class KeypointsModel:
         """
         self.data_dir = data_dir
         self.hp = hp
-        self.keypoints_3d = keypoints_3d
         self.nb_keypoints = hp['keypoints']
+        self.keypoints_3d = keypoints_3d[:self.nb_keypoints]
         self.crop_size = hp['crop_size']
         self.crop_size_rounded = int(2**round(np.log2(hp['crop_size'])))
 
@@ -97,7 +149,15 @@ class KeypointsModel:
                 # convert back to [-1, 1] format
                 image = image * 2 - 1
 
-            return image, keypoints
+            truth = self.encode_label(
+                keypoints=keypoints,
+                pose=parsed['image/object/pose'],
+                height=height,
+                width=width,
+                bbox_size=bbox_size,
+                centroid=centroid
+            )
+            return image, truth
 
         with open(os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r") as f:
             num_examples = int(f.read())
@@ -127,6 +187,7 @@ class KeypointsModel:
         # cv2.imwrite('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
         model_path = os.path.join(logdir, "model.h5")
+        pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'])
         callbacks = [
             tf.keras.callbacks.TensorBoard(
                 log_dir=logdir,
@@ -138,7 +199,8 @@ class KeypointsModel:
                 monitor='val_loss',
                 save_best_only=True,
                 mode='min'
-            )
+            ),
+            pose_error_callback
         ]
 
         model = {
@@ -151,7 +213,9 @@ class KeypointsModel:
         optimizer = self.OPTIMIZERS[self.hp['optimizer']](**self.hp['optimizer_args'])
         model.compile(
             optimizer=optimizer,
-            loss='mse',
+            loss=self.mse_loss,
+            metrics=[pose_error_callback.assign_metric_ignore],
+            run_eagerly=False
         )
         model.fit(
             train_dataset,
@@ -239,8 +303,65 @@ class KeypointsModel:
         return tf.keras.models.Model(unet_in, x)
 
     @staticmethod
+    def mse_loss(y_true, y_pred):
+        kps = KeypointsModel.decode_label(y_true)['keypoints']
+        return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
+
+    @staticmethod
+    def get_pose_error_metric(ref_points, focal_length=1422):
+        def pose_error_metric(y_true, y_pred):
+            label = KeypointsModel.decode_label(y_true)
+            kps_batch = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1, 2])
+            kps_batch = kps_batch * (label['bbox_size'] // 2)[:, None, None] + label['centroid'][:, None, :]
+            # kps_batch = kps_batch.numpy()
+            error_batch = tf.zeros([tf.shape(kps_batch)[0]])
+            for i, kps in enumerate(kps_batch):
+                r_vec, t_vec, _, _ = utils.calculate_pose_vectors(
+                    ref_points, kps,
+                    focal_length, label['height'][i])
+                error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i])
+            return error_batch
+
+        return pose_error_metric
+
+    @staticmethod
+    def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
+        if len(keypoints.shape) == 3:
+            keypoints = tf.reshape(keypoints, [tf.shape(keypoints)[0], -1])
+            return tf.concat((
+                tf.reshape(tf.cast(pose, tf.float32), [-1, 4]),
+                tf.reshape(tf.cast(height, tf.float32), [-1, 1]),
+                tf.reshape(tf.cast(width, tf.float32), [-1, 1]),
+                tf.reshape(tf.cast(bbox_size, tf.float32), [-1, 1]),
+                tf.reshape(tf.cast(centroid, tf.float32), [-1, 2]),
+                tf.cast(keypoints, tf.float32),
+            ), axis=-1)
+        else:
+            keypoints = tf.reshape(keypoints, [-1])
+            return tf.concat((
+                tf.reshape(tf.cast(pose, tf.float32), [4]),
+                tf.reshape(tf.cast(height, tf.float32), [1]),
+                tf.reshape(tf.cast(width, tf.float32), [1]),
+                tf.reshape(tf.cast(bbox_size, tf.float32), [1]),
+                tf.reshape(tf.cast(centroid, tf.float32), [2]),
+                tf.cast(keypoints, tf.float32),
+            ), axis=-1)
+
+    @staticmethod
+    def decode_label(label):
+        if len(label.shape) == 1:
+            label = label[None, ...]
+        return {
+            'pose': tf.squeeze(label[:, :4]),
+            'height': tf.squeeze(label[:, 4]),
+            'width': tf.squeeze(label[:, 5]),
+            'bbox_size': tf.squeeze(label[:, 6]),
+            'centroid': tf.squeeze(label[:, 7:9]),
+            'keypoints': tf.squeeze(tf.reshape(label[:, 9:], [tf.shape(label)[0], -1, 2])),
+        }
+
+    @staticmethod
     def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints):
-        tf.ensure_shape(parsed_kps, (256,))
         keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
         x_coords = keypoints[:, 0]
         y_coords = keypoints[:, 1]
@@ -275,7 +396,7 @@ class KeypointsModel:
         centroid = tf.cast(centroid, tf.float32)
 
         # convert to [0, 1] relative coordinates
-        imdims = tf.cast(tf.shape(image)[:2] - 1, tf.float32)
+        imdims = tf.cast(tf.shape(image)[:2], tf.float32)
         centroid /= imdims
         bbox_size /= imdims  # will broadcast to shape [2]
 
