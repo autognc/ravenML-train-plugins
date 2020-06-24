@@ -10,7 +10,6 @@ import os
 import shutil
 import cv2
 
-from ravenml.utils.local_cache import LocalCache, global_cache
 from .train import PoseRegressionModel
 from . import utils
 
@@ -22,9 +21,9 @@ def tf_pose_regression():
 
 @tf_pose_regression.command(help="Train a model.")
 @pass_train
-@click.option("--config", "-c", type=click.Path(exists=True), required=True)
+# @click.option("--config", "-c", type=click.Path(exists=True), required=True)
 @click.pass_context
-def train(ctx, train: TrainInput, config):
+def train(ctx, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -32,15 +31,7 @@ def train(ctx, train: TrainInput, config):
     # After training, create an instance of TrainOutput and return it
 
     # set base directory for model artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-feature-points').path if train.artifact_path is None \
-        else train.artifact_path
-
-    if os.path.exists(artifact_dir):
-        if user_confirms('Artifact storage location contains old data. Overwrite?'):
-            shutil.rmtree(artifact_dir)
-        else:
-            return ctx.exit()
-    os.makedirs(artifact_dir)
+    artifact_dir = train.artifact_path
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
@@ -49,18 +40,16 @@ def train(ctx, train: TrainInput, config):
     # mean = np.load(str(train.dataset.path / 'mean.npy'))
     # stdev = np.load(str(train.dataset.path / 'stdev.npy'))
 
-    with open(config, "r") as f:
-        hyperparameters = json.load(f)
+    hyperparameters = train.plugin_config
 
     # fill metadata
-    metadata = {
+    train.metadata[train.plugin_metadata_field] = {
         'architecture': 'feature_points_regression',
-        'date_started_at': datetime.utcnow().isoformat() + "Z",
-        'dataset_used': train.dataset.metadata,
         'config': hyperparameters
     }
+    
     with open(artifact_dir / 'metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(train.metadata, f, indent=2)
 
     # run training
     print("Beginning training. Hyperparameters:")
@@ -78,7 +67,7 @@ def train(ctx, train: TrainInput, config):
             if "events.out.tfevents" in filename:
                 extra_files.append(os.path.join(dirpath, filename))
 
-    return TrainOutput(metadata, artifact_dir, model_path, extra_files, train.artifact_path is not None)
+    return TrainOutput(train.metadata, artifact_dir, model_path, extra_files)
 
 
 @tf_pose_regression.command(help="Evaluate a model (Keras .h5 format).")

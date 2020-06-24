@@ -35,6 +35,13 @@ setup(
         'opencv-python==4.1.2.30',
         tensorflow_pkg
     ],
+    data_files = [
+        ('deeplabv3_mnv2_dm05_pascal_trainaug', [
+            'frozen_inference_graph.pb',
+            'model.ckpt.data-00000-of-00001',
+            'model.ckpt.index'
+        ])
+    ],
     entry_points='''
         [ravenml.plugins.train]
         tf_bbox=rmltraintfbbox.core:tf_bbox
