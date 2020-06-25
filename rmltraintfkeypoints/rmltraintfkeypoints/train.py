@@ -47,9 +47,10 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
 
     def on_train_batch_end(self, batch, logs=None):
         self.comet_step += 1
-        self.train_errors.append(np.mean(self.calc_pose_error()))
-        mean = np.mean(self.train_errors)
-        print(f' - pose error: {mean:.4f} ({np.degrees(mean):.2f} deg)')
+        mean = np.mean(self.calc_pose_error())
+        self.train_errors.append(mean)
+        running_mean = np.mean(self.train_errors)
+        print(f' - pose error: {running_mean:.4f} ({np.degrees(running_mean):.2f} deg)')
         if self.experiment:
             self.experiment.log_metric('pose_error_deg', np.degrees(mean), step=self.comet_step)
 
