@@ -200,47 +200,63 @@ class KeypointsModel:
         #     cv2.circle(img, (x, y), 4, (255, 255, 255), -1)
         # cv2.imwrite('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
-        model_path = os.path.join(logdir, "model.h5")
         pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'], experiment)
-        callbacks = [
-            tf.keras.callbacks.TensorBoard(
-                log_dir=logdir,
-                write_graph=False,
-                profile_batch=0
-            ),
-            tf.keras.callbacks.ModelCheckpoint(
-                model_path,
-                monitor='val_loss',
-                save_best_only=True,
-                mode='min'
-            ),
-            pose_error_callback
-        ]
+        for i, phase in enumerate(self.hp['phases']):
+            phase_logdir = os.path.join(logdir, f"phase_{i}")
+            model_path = os.path.join(phase_logdir, "model.h5")
+            callbacks = [
+                tf.keras.callbacks.TensorBoard(
+                    log_dir=phase_logdir,
+                    write_graph=False,
+                    profile_batch=0
+                ),
+                tf.keras.callbacks.ModelCheckpoint(
+                    model_path,
+                    monitor='val_loss',
+                    save_best_only=True,
+                    mode='min'
+                ),
+                pose_error_callback
+            ]
 
-        model = {
-            'mobilenet': self._gen_model_mobilenet,
-            'densenet': self._gen_model_densenet,
-            'unet': self._get_custom_unet
-        }[self.hp['model_arch']]()
-        print(model.summary())
+            # if this is the first phase, generate a new model with fresh weights.
+            # otherwise, load the model from the previous phase's best checkpoint
+            if i == 0:
+                model = {
+                    'mobilenet': self._gen_model_mobilenet,
+                    'densenet': self._gen_model_densenet,
+                    'unet': self._get_custom_unet
+                }[self.hp['model_arch']]()
+            else:
+                model = tf.keras.models.load_model(
+                    os.path.join(logdir, f"phase_{i - 1}", "model.h5"),
+                    compile=False
+                )
 
-        optimizer = self.OPTIMIZERS[self.hp['optimizer']](**self.hp['optimizer_args'])
-        model.compile(
-            optimizer=optimizer,
-            loss=self.mse_loss,
-            metrics=[pose_error_callback.assign_metric_ignore],
-            run_eagerly=False
-        )
-        model.fit(
-            train_dataset,
-            epochs=self.hp['epochs'],
-            steps_per_epoch=num_train // self.hp['batch_size'],
-            validation_data=val_dataset,
-            validation_steps=num_val // self.hp['batch_size'],
-            callbacks=callbacks
-        )
-        if experiment:
-            experiment.log_model('model', model_path)
+            # allow training on only the layers from start_layer onwards
+            start_layer_index = model.layers.index(model.get_layer(phase['start_layer']))
+            for layer in model.layers[:start_layer_index]:
+                layer.trainable = False
+            for layer in model.layers[start_layer_index:]:
+                layer.trainable = True
+            print(model.summary())
+
+            optimizer = self.OPTIMIZERS[phase['optimizer']](**phase['optimizer_args'])
+            model.compile(
+                optimizer=optimizer,
+                loss=self.mse_loss,
+                metrics=[pose_error_callback.assign_metric_ignore],
+            )
+            model.fit(
+                train_dataset,
+                epochs=phase['epochs'],
+                steps_per_epoch=num_train // self.hp['batch_size'],
+                validation_data=val_dataset,
+                validation_steps=num_val // self.hp['batch_size'],
+                callbacks=callbacks
+            )
+            if experiment:
+                experiment.log_model(f'phase_{i}', model_path)
 
         return model_path
 
@@ -257,7 +273,9 @@ class KeypointsModel:
         app_out = keras_app_model.output
         x = app_out
         for i in range(self.hp['fc_count']):
-            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
+            x = tf.keras.layers.Dense(self.hp['fc_width'], use_bias=False)(x)
+            x = tf.keras.layers.BatchNormalization()(x)
+            x = tf.keras.layers.ReLU()(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
         return tf.keras.models.Model(app_in, x)
 

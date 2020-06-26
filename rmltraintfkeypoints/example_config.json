@@ -5,13 +5,13 @@
   "batch_size": 16,
   "cache_train_data": false,
   "prefetch_num_batches": 5,
-  "epochs": 100,
-  "crop_size": 250,
+  "crop_size": 224,
   "shuffle_buffer_size": 8192,
-  "model_arch": "densenet",
+  "model_arch": "mobilenet",
   "model_init_weights": "imagenet",
   "model_unet_params": {},
-  "optimizer": "Adam",
-  "optimizer_args": {"lr": 0.001},
+  "phases": [
+    {"optimizer":  "Adam", "optimizer_args":  {"learning_rate": 0.001}, "epochs": 100, "start_layer": "input_1"}
+  ],
   "pnp_focal_length": 1422
 }
