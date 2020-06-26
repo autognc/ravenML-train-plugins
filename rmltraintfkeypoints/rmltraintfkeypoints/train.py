@@ -273,9 +273,7 @@ class KeypointsModel:
         app_out = keras_app_model.output
         x = app_out
         for i in range(self.hp['fc_count']):
-            x = tf.keras.layers.Dense(self.hp['fc_width'], use_bias=False)(x)
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = tf.keras.layers.ReLU()(x)
+            x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
         return tf.keras.models.Model(app_in, x)
 

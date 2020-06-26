@@ -128,7 +128,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     test_data = test_data.batch(32)
     img_cnt = 0
     for image_batch, truth_batch in tqdm.tqdm(test_data):
-        kps_batch = model(image_batch).numpy()
+        kps_batch = model.predict(image_batch)
         kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         kps_true_batch = (truth_batch['keypoints'] - truth_batch['centroid'][:, None, :])\

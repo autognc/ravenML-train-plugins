@@ -2,7 +2,7 @@
   "keypoints": 20,
   "fc_width": 512,
   "fc_count": 1,
-  "batch_size": 16,
+  "batch_size": 96,
   "cache_train_data": false,
   "prefetch_num_batches": 5,
   "crop_size": 224,
