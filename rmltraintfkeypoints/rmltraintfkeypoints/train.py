@@ -156,6 +156,17 @@ class KeypointsModel:
 
             # other augmentations
             if train:
+                # random multiple of 90 degree rotation
+                k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
+                angle = tf.cast(k, tf.float32) * (np.pi / 2)
+                cos = tf.cos(angle)
+                sin = tf.sin(angle)
+                rot_matrix = tf.convert_to_tensor([[cos, -sin], [sin, cos]])
+                keypoints = tf.reshape(keypoints, [-1, 2])[..., None]
+                keypoints = tf.reshape(tf.linalg.matmul(rot_matrix, keypoints), [-1])
+                image = tf.image.rot90(image, k)
+
+
                 # image values into the [0, 1] format
                 image = (image + 1) / 2
 
@@ -196,10 +207,17 @@ class KeypointsModel:
         val_dataset, num_val = self._get_dataset('test', False)
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
 
-        # imgs, labels = list(train_dataset.take(1).as_numpy_iterator())[0]
-        # img, label = imgs[0], labels[0]
-        # kp = KeypointsModel.decode_label(label)['keypoints']
-        # img = ((img + 1) / 2 * 255).astype(np.uint8)
+        """imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
+        for img, kp in zip(imgs, kps):
+            kp = self.decode_label(kp)['keypoints'].numpy()
+            kp = kp * (self.crop_size / 2) + (self.crop_size / 2)
+            img = ((img + 1) / 2 * 255).astype(np.uint8)
+            for i in range(len(kp)):
+                y = int(kp[i, 0])
+                x = int(kp[i, 1])
+                cv2.circle(img, (x, y), 4, (255, 255, 255), -1)
+            cv2.imshow('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(0)"""
 
         pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'], experiment)
         for i, phase in enumerate(self.hp['phases']):
