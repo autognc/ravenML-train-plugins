@@ -62,3 +62,7 @@ def geodesic_error(rot_pred, rot_truth):
 def _quat_geodesic_error(q1, q2):
     dot = np.abs(np.sum(q1 * q2))
     return 2 * np.arccos(np.clip(dot, 0, 1))
+
+
+def pow2_round(num):
+    return int(2**round(np.log2(num)))

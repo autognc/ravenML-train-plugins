@@ -88,7 +88,8 @@ class KeypointsModel:
         self.nb_keypoints = hp['keypoints']
         self.keypoints_3d = keypoints_3d[:self.nb_keypoints]
         self.crop_size = hp['crop_size']
-        self.crop_size_rounded = int(2**round(np.log2(hp['crop_size'])))
+        self.crop_size_rounded = utils.pow2_round(self.crop_size)
+        self.keypoints_mode = 'mask' if (self.hp['model_arch'] == 'unet') else 'coords'
 
     def _get_dataset(self, split_name, train):
         """
@@ -148,8 +149,9 @@ class KeypointsModel:
             # decode, preprocess to [-1, 1] range, and crop image/keypoints
             old_dims, image = self.preprocess_image(parsed['image/encoded'], 
                 centroid, bbox_size, cropsize)
+
             keypoints = self.preprocess_keypoints(parsed['image/object/keypoints'].values, 
-                centroid, bbox_size, cropsize, old_dims, self.nb_keypoints)
+                centroid, bbox_size, cropsize, old_dims, self.nb_keypoints, keypoints_mode=self.keypoints_mode)
 
             # other augmentations
             if train:
@@ -169,7 +171,8 @@ class KeypointsModel:
                 height=height,
                 width=width,
                 bbox_size=bbox_size,
-                centroid=centroid
+                centroid=centroid,
+                keypoints_mode=self.keypoints_mode
             )
             return image, truth
 
@@ -190,15 +193,10 @@ class KeypointsModel:
         val_dataset, num_val = self._get_dataset('test', False)
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
 
-        # imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
-        # img, kp = img[0], kps[0]
+        # imgs, labels = list(train_dataset.take(1).as_numpy_iterator())[0]
+        # img, label = imgs[0], labels[0]
+        # kp = KeypointsModel.decode_label(label)['keypoints']
         # img = ((img + 1) / 2 * 255).astype(np.uint8)
-        # w, h, _ = img.shape
-        # for i in range(len(kp) // 2):
-        #     y = int(kp[i * 2] * (w // 2) + (w // 2))
-        #     x = int(kp[i * 2 + 1] * (w // 2) + (w // 2))
-        #     cv2.circle(img, (x, y), 4, (255, 255, 255), -1)
-        # cv2.imwrite('test.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
         pose_error_callback = PoseErrorCallback(self.keypoints_3d, self.crop_size, self.hp['pnp_focal_length'], experiment)
         for i, phase in enumerate(self.hp['phases']):
@@ -216,7 +214,7 @@ class KeypointsModel:
                     save_best_only=True,
                     mode='min'
                 ),
-                pose_error_callback
+                # TODO not break w/unet: pose_error_callback
             ]
 
             # if this is the first phase, generate a new model with fresh weights.
@@ -244,7 +242,7 @@ class KeypointsModel:
             optimizer = self.OPTIMIZERS[phase['optimizer']](**phase['optimizer_args'])
             model.compile(
                 optimizer=optimizer,
-                loss=self.mse_loss,
+                loss=KeypointsModel.make_mse_loss(keypoints_mode=self.keypoints_mode),
                 metrics=[pose_error_callback.assign_metric_ignore],
             )
             model.fit(
@@ -297,12 +295,11 @@ class KeypointsModel:
     def _get_custom_unet(self):
         from keras_unet.models import custom_unet
         assert not self.hp.get('model_init_weights')
-        unet_decoder_method = self.hp.get('model_unet_decoder', 'maxpool')
-        unet_decoder_params = self.hp.get('model_unet_decoder_params')
-        unet_params = dict(
+        unet_params = self.hp.get('model_unet_params', {})
+        unet_model_params = dict(
             input_shape=(self.crop_size_rounded, self.crop_size_rounded, 3),
             use_batch_norm=False,
-            num_classes=1,
+            num_classes=self.nb_keypoints,
             num_layers=4,
             activation='relu',
             filters=16,
@@ -311,31 +308,41 @@ class KeypointsModel:
             dropout=0.3,
             output_activation='linear'
         )
-        unet_params.update(self.hp.get('model_unet_params', {}))
-        unet_model = custom_unet(**unet_params)
-
+        # Override select model params with the config values.
+        overridable_model_params = [
+            'use_batch_norm', 'num_layers', 'activation', 
+            'filters', 'use_attention', 'upsample_mode'
+        ]
+        for override_param in overridable_model_params:
+            param_val = unet_params.get(override_param)
+            if param_val is not None:
+                unet_model_params[override_param] = param_val
+        unet_model = custom_unet(**unet_model_params)
         # Convert UNet 3d output to keypoints
         unet_in = unet_model.input
         unet_out = unet_model.output
-        x = unet_out
-        if unet_decoder_method == 'maxpool':
-            if unet_decoder_params is None:
-                pool_size = (4, 4)
-            else:
-                pool_size = unet_decoder_params
-            x = tf.keras.layers.MaxPooling2D(pool_size)(x)
-            x = tf.keras.layers.Flatten()(x)
-            for i in range(self.hp['fc_count']):
-                x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
-            x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
-        else:
-            raise ValueError('Unsupported UNet decoder method.')
+        out_size = self.crop_size_rounded * self.crop_size_rounded * self.nb_keypoints
+        x = tf.keras.layers.Reshape((out_size,))(unet_out)
         return tf.keras.models.Model(unet_in, x)
 
     @staticmethod
-    def mse_loss(y_true, y_pred):
-        kps = KeypointsModel.decode_label(y_true)['keypoints']
-        return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
+    def make_mse_loss(*, keypoints_mode):
+        def mse_loss_coords(y_true, y_pred):
+            kps = KeypointsModel.decode_label(y_true)['keypoints']
+            return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
+        def mse_loss_mask(y_true, y_pred):
+            kps = KeypointsModel.decode_label(y_true)['keypoints']
+            # TODO decoding seems to be build for coord method
+            # so `kps_fixed_shape` is required
+            # TODO pass in cropsize and nb_keypoints to compute shape
+            kps_fixed_shape = tf.reshape(kps, (-1, 1310720))
+            return tf.keras.losses.mse(kps_fixed_shape, y_pred)
+        if keypoints_mode == 'coords':
+            return mse_loss_coords
+        elif keypoints_mode == 'mask':
+            return mse_loss_mask
+        else:
+            raise NotImplementedError(keypoints_mode)
 
     @staticmethod
     def get_pose_error_metric(ref_points, focal_length=1422):
@@ -351,12 +358,11 @@ class KeypointsModel:
                     focal_length, label['height'][i])
                 error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i])
             return error_batch
-
         return pose_error_metric
 
     @staticmethod
-    def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
-        if len(keypoints.shape) == 3:
+    def encode_label(*, keypoints, pose, height, width, bbox_size, centroid, keypoints_mode):
+        if len(keypoints.shape) == 3 and keypoints_mode == 'coords':
             keypoints = tf.reshape(keypoints, [tf.shape(keypoints)[0], -1])
             return tf.concat((
                 tf.reshape(tf.cast(pose, tf.float32), [-1, 4]),
@@ -391,20 +397,43 @@ class KeypointsModel:
         }
 
     @staticmethod
-    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints):
-        keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
-        x_coords = keypoints[:, 0]
-        y_coords = keypoints[:, 1]
-        # denorm
-        x_coords *= img_size[0]
-        y_coords *= img_size[1]
-        # center
-        x_coords -= centroid[0]
-        y_coords -= centroid[1]
-        # renorm
-        x_coords /= (bbox_size // 2)
-        y_coords /= (bbox_size // 2)
-        return tf.reshape(tf.stack([x_coords, y_coords], axis=1), (nb_keypoints * 2,))
+    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints, keypoints_mode='coords'):
+        def _get_image_coords():
+            keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
+            x_coords = keypoints[:, 0]
+            y_coords = keypoints[:, 1]
+            x_coords *= img_size[0]
+            y_coords *= img_size[1]
+            return x_coords, y_coords
+        if keypoints_mode == 'coords':
+            xc, yc = _get_image_coords()
+            xc -= centroid[0]
+            yc -= centroid[1]
+            xc /= (bbox_size // 2)
+            yc /= (bbox_size // 2)
+            return tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints * 2,))
+        elif keypoints_mode == 'mask':
+            xc, yc = _get_image_coords()
+            xc -= centroid[0] - (bbox_size // 2)
+            yc -= centroid[1] - (bbox_size // 2)
+            resize_coef = cropsize / bbox_size
+            xc *= resize_coef
+            yc *= resize_coef
+            crop_coords = tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints, 2))
+            crop_coords_with_idx = tf.concat([
+                tf.cast(crop_coords, tf.int64), 
+                tf.reshape(tf.range(0, nb_keypoints, 1, dtype=tf.int64), (nb_keypoints, 1))
+            ], axis=1)
+            mask_sparse = tf.sparse.reorder(tf.sparse.SparseTensor(
+                crop_coords_with_idx, 
+                tf.ones((nb_keypoints,), dtype=tf.float32), 
+                dense_shape=(cropsize, cropsize, nb_keypoints)
+            ))
+            mask = tf.sparse.to_dense(mask_sparse, default_value=0.)
+            # TODO smooth the mask
+            return mask
+        else:
+            raise NotImplementedError(keypoints_mode)
 
     @staticmethod
     def preprocess_image(image_data, centroid, bbox_size, cropsize):

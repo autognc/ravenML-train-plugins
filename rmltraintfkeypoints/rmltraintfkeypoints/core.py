@@ -108,7 +108,9 @@ def train(ctx, train: TrainInput, config, comet):
 @pass_train
 @click.pass_context
 def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=False):
-    assert train.artifact_path is not None, "Please run in local mode."
+    if train.artifact_path is None:
+        train.artifact_path = os.path.join(os.getcwd(), 'local_artifacts')
+        os.makedirs(train.artifact_path, exist_ok=True)
     errs = []
     errs_by_keypoint = []
     model = tf.keras.models.load_model(model_path, compile=False)
@@ -120,7 +122,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
 
     model.compile(
         optimizer=tf.keras.optimizers.SGD(),
-        loss=KeypointsModel.mse_loss,
+        loss=KeypointsModel.make_mse_loss(keypoints_mode='coords'), # TODO check if mask
         metrics=[pose_error_callback.assign_metric_ignore]
     )
 
