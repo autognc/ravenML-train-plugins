@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import os
+import time
 from . import utils
 
 
@@ -245,16 +246,20 @@ class KeypointsModel:
                 loss=KeypointsModel.make_mse_loss(keypoints_mode=self.keypoints_mode),
                 metrics=[pose_error_callback.assign_metric_ignore],
             )
-            model.fit(
-                train_dataset,
-                epochs=phase['epochs'],
-                steps_per_epoch=num_train // self.hp['batch_size'],
-                validation_data=val_dataset,
-                validation_steps=num_val // self.hp['batch_size'],
-                callbacks=callbacks
-            )
-            if experiment:
-                experiment.log_model(f'phase_{i}', model_path)
+            try:
+                model.fit(
+                    train_dataset,
+                    epochs=phase['epochs'],
+                    steps_per_epoch=num_train // self.hp['batch_size'],
+                    validation_data=val_dataset,
+                    validation_steps=num_val // self.hp['batch_size'],
+                    callbacks=callbacks
+                )
+            except Exception:
+                return model_path
+            finally:
+                if experiment:
+                    experiment.log_model(f'phase_{i}', model_path)
 
         return model_path
 
