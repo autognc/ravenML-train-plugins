@@ -112,6 +112,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     # prepare directory for training/prompt for hyperparams
     if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
         ctx.exit('Training cancelled.')
+    
+    num_train_steps = metadata['hyperparameters']['train_steps']
+    num_train_steps = int(num_train_steps)
 
     model_dir = os.path.join(base_dir, 'models/model')
     models_dir = os.path.join(base_dir, 'models')
@@ -126,10 +129,12 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
             "training_iteration": 40,  # how many times train is invoked
         },
         "config": {
+            "train_steps": num_train_steps,
             "lr": grid_search([10 ** -2, 10 ** -5]),
             "base_dir": base_dir,
             "base_pipeline": pipeline_config_path,
             "arch_path": arch_path,
+            "dataset_path": train.dataset.path,
             "cur_dir" : Path(os.path.dirname(os.path.abspath(__file__)))
         },
         "num_samples": 1,
@@ -142,7 +147,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     pbt = PopulationBasedTraining(
         time_attr="training_iteration",
         reward_attr="accuracy",
-        perturbation_interval=5,
+        perturbation_interval=2,
         hyperparam_mutations={
             "lr": lambda: np.random.uniform(0, 1),
         })
@@ -235,7 +240,8 @@ class MyTrainableEstimator(Trainable):
         self.config = config
         self._setup_dirs()
         ####does this need to be different for each
-        self.training_steps = 100
+        self.training_steps_per_trial = 10
+        self.max_steps = self.config["train_steps"]
         """
         run_config = tf.estimator.RunConfig(
             model_dir=self.model_folder,
@@ -246,30 +252,35 @@ class MyTrainableEstimator(Trainable):
             keep_checkpoint_max=None,  # avoid removing checkpoints
             keep_checkpoint_every_n_hours=None)
         """
-        path = os.path.join(self.model_folder, "log.txt")
-        with open(path, "w") as f:
+        self.log_path = os.path.join(self.model_folder, "log.txt")
+        with open(self.log_path, "w") as f:
             f.write('setting up \n')
-        run_config = tf.estimator.RunConfig(model_dir=self.model_folder)
+        
+        self.run_config = tf.estimator.RunConfig(
+            model_dir=self.model_folder,
+            save_checkpoints_steps=self.training_steps_per_trial )
+
         train_and_eval_dict = model_lib.create_estimator_and_inputs(
-        run_config=run_config,
-        sample_1_of_n_eval_examples=100,
-        hparams=model_hparams.create_hparams(None),
-        pipeline_config_path=self.pipeline_config_path,
-        train_steps=self.training_steps)
+            run_config=self.run_config,
+            sample_1_of_n_eval_examples=100,
+            hparams=model_hparams.create_hparams(None),
+            pipeline_config_path=self.pipeline_config_path,
+            train_steps=self.max_steps)
+
         self.iters = 0
         self.estimator = train_and_eval_dict['estimator']
         self.train_input_fn = train_and_eval_dict['train_input_fn']
         self.eval_input_fns = train_and_eval_dict['eval_input_fns']
         self.eval_on_train_input_fn = train_and_eval_dict['eval_on_train_input_fn']
         self.predict_input_fn = train_and_eval_dict['predict_input_fn']
-        self.train_steps = train_and_eval_dict['train_steps']
+        self.model_fn = self.estimator.model_fn
         
         self.train_spec, self.eval_specs = model_lib.create_train_and_eval_specs(
             self.train_input_fn,
             self.eval_input_fns,
             self.eval_on_train_input_fn,
             self.predict_input_fn,
-            self.training_steps,
+            self.max_steps,
             final_exporter_name ='exported_model',
             eval_on_train_data=False)
         self.steps = 0
@@ -289,17 +300,22 @@ class MyTrainableEstimator(Trainable):
         #self.datahook = CheckpointInputPipelineHook(self.estimator)
         # training       
         self.iters = self.iters + 1
-        path = os.path.join(self.model_folder, "log.txt")
-        with open(path, "a") as f:
+
+        with open(self.log_path, "a") as f:
             f.write(str(self.model_folder) + '\n')
-            f.write(str(self.iters))
+            f.write("training iteration: " + str(self.iters) + "\n")
             f.write('Training model...\n')
-        metrics, export_results = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
+        #metrics, export_results = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
+        self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps_per_trial)
+        metrics = self.estimator.evaluate(input_fn=self.eval_input_fns[0])
         accuracy = metrics['DetectionBoxes_Precision/mAP']
-        self.steps = self.steps + self.training_steps
-        with open(path, "a") as f:
+        self._evaluate()
+        self.steps = self.steps + self.training_steps_per_trial
+        with open(self.log_path, "a") as f:
             f.write(str(type(metrics)) + '\n')
             f.write("accuracy: " + str(accuracy) + '\n')
+            for metric in metrics.keys():
+                f.write(str(metric) + '\n')
         return {'accuracy': accuracy}
 
     def _stop(self):
@@ -320,12 +336,33 @@ class MyTrainableEstimator(Trainable):
         # )
         #
         tf.logging.info('Saving checkpoint {} for tune'.format(lastest_checkpoint))
+        with open(self.log_path, "a") as f:
+            f.write("latest_checkpoint: " + str(latest_checkpoint) + "\n")
         f = open(checkpoint_dir + '/path.txt', 'w')
         f.write(lastest_checkpoint)
         f.flush()
         f.close()
         return checkpoint_dir + '/path.txt'
-        
+
+    def _restore(self, checkpoint_path):
+        """
+        Population members that perform very well will be
+        exploited (restored) from their checkpoint
+        :param checkpoint_path:
+        :return:
+        """
+        f = open(checkpoint_path, 'r')
+        path = f.readline().strip()
+        tf.logging.info('Opening checkpoint {} for tune'.format(path))
+        f.flush()
+        f.close()
+        self.estimator = tf.estimator.Estimator(
+            model_fn=self.model_fn,
+            warm_start_from=tf.estimator.WarmStartSettings(ckpt_to_initialize_from=path)
+        )  # restore waights from the
+        with open(self.log_path, "a") as f:
+            f.write("restored checkpoint\n")
+            # checkpoint)
     def _setup_dirs(self):
         
         self.base_dir  = self.config['base_dir']
@@ -461,6 +498,39 @@ class MyTrainableEstimator(Trainable):
             'image_tensor', pipeline_config, checkpoint_path,
             output_directory, input_shape=input_shape,
             write_inference_graph=False)
+    
+    def _evaluate(self):
+
+        with open(self.log_path, "a") as f:
+            f.write("Doing custom evaluation\n")
+         # get extra config files
+        extra_files, frozen_graph_path = self._get_paths_for_extra_files()
+        model_path = str(frozen_graph_path)
+        
+        
+        with ExitStack() as stack:
+
+            # path to label_map.pbtxt
+            label_path = str(extra_files[-1])
+            test_path = str(self.config['dataset_path'] / 'test')
+            output_path = str(self.base_dir / 'validation')
+
+            image_dataset = utils.get_image_dataset(test_path)
+            truth_data = list(utils.gen_truth_data(test_path))
+
+            model = BoundingBoxModel(model_path, label_path)
+            evaluator = BoundingBoxEvaluator(model.category_index)
+            image_tensor = image_dataset.make_one_shot_iterator().get_next()
+            with tf.Session() as sess:
+                with model.start_session():
+                    for i, (bbox, centroid) in enumerate(truth_data):
+                        image = sess.run(image_tensor)
+                        output, inference_time = model.run_inference_on_single_image(image)
+                        evaluator.add_single_result(output, inference_time, bbox, centroid)
+
+            evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))    
+        
+
     def do_nothing(self):
         time.sleep(5)
         return 1
