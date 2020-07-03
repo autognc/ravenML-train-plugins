@@ -20,7 +20,6 @@ from ravenml.utils.plugins import raise_parameter_error
 
 init()
 
-# TODO: update docs
 def prepare_for_training(
     bbox_cache: RMLCache,
     base_dir: Path, 
@@ -36,11 +35,13 @@ def prepare_for_training(
     to given metadata dictionary.
 
     Args:
+        bbox_cache (RMLCache): cache object for the bbox plugin
         base_dir (Path): root of training directory
         data_path (Path): path to dataset
         arch_path (Path): path to model architecture directory
         model_type (str): name of model type (i.e, ssd_inception_v1)
         metadata (dict): metadata dictionary to add fields to
+        config (dict): plugin config from user provided config yaml
 
     Returns:
         bool: True if successful, False otherwise
@@ -199,6 +200,7 @@ def download_model_arch(model_name: str, bbox_cache: RMLCache):
 
     Args:
         model_name (str): model type
+        bbox_cache (RMLCache): cache object for the bbox plugin
     
     Returns:
         Path: path to model architecture
@@ -249,6 +251,7 @@ def _print_config(msg: str, config: dict):
     """Prints the given training configuration with colorization.
 
     Args:
+        msg (str): message to print prior to printing config
         config (dict): training configuration to print
     """
     click.echo(msg)
@@ -265,7 +268,6 @@ def _process_user_hyperparameters(current_config: dict, hyperparameters: dict):
     Returns:
         dict: updated training configuration
     """
-    # TODO: better format checking here (handling spaces, misformatted HP)
     for parameter in hyperparameters.keys():
         if(parameter not in current_config):
             hint = f'hyperparameters, {parameter} is not supported for this model architecture.'

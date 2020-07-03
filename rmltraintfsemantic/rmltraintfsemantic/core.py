@@ -51,12 +51,9 @@ def setup_dataset(dataset_path):
 
     return num_classes
 
-
-
 @click.group(help='TensorFlow Semantic Segmentation.')
 def tf_semantic():
     pass
-
 
 @tf_semantic.command(help="Train a model.", context_settings=dict(ignore_unknown_options=True))
 @pass_train
@@ -66,8 +63,8 @@ def train(ctx, train: TrainInput, extra_deeplab_args):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train".
-    # After training, create an instance of TrainOutput and return it
+    # object creation, after which execution will fail as this means 
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
     from deeplab import train as deeplab_train
 
     # set base directory for model artifacts
@@ -88,11 +85,9 @@ def train(ctx, train: TrainInput, extra_deeplab_args):
     num_classes = setup_dataset(train.dataset.path)
 
     # fill metadata
-    train.metadata[train.plugin_metadata_field ]= {
-        'architecture': 'deeplab',
-        'num_classes': num_classes,
-        'deeplab_options': config_opts,
-    }
+    train.plugin_metadata['architecture'] = 'deeplab'
+    train.plugin_metadata['num_classes'] = num_classes
+    train.plugin_metadata['deplab_options'] = config_opts
 
     # fill sys.argv to be passed to deeplab
     sys.argv = [sys.argv[0]]
@@ -114,7 +109,7 @@ def train(ctx, train: TrainInput, extra_deeplab_args):
     # return TrainOutput
     model_path = artifact_dir / "checkpoint"
     checkpoint_files = list(map(Path, (glob.glob(str(artifact_dir.absolute() / "*")))))
-    return TrainOutput(train.metadata, artifact_dir, Path(model_path), checkpoint_files)
+    return TrainOutput(Path(model_path), checkpoint_files)
 
 # NOTE: eval and vis are NOT tested with the current setup. test if we start using deeplab again
 

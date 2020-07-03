@@ -24,8 +24,7 @@ import re
 from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
-from ravenml.options import verbose_opt
-from ravenml.train.options import kfold_opt, pass_train
+from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.data.interfaces import Dataset
 from ravenml.utils.question import cli_spinner, Spinner, user_selects, user_input
@@ -41,15 +40,6 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
 # put any custom Click options you create here
-no_comet_opt = click.option(
-    '-c', '--no-comet', is_flag=True,
-    help='Disable comet on this training run.'
-)
-
-no_validate_opt = click.option(
-    '--no-validate', is_flag=True,
-    help='Do not automatically run validation after training.'
-)
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with instance segmentation.')
@@ -64,15 +54,17 @@ def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train"
+    # object creation, after which execution will fail as this means 
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
     
     # NOTE: after training, you must create an instance of TrainOutput and return it
+    
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
     
     ## SET UP CONFIG ##
     config = train.plugin_config
-    metadata = train.metadata[train.plugin_metadata_field]
+    metadata = train.plugin_metadata
     comet = config.get('comet')
     
     # set up TF verbosity
@@ -140,6 +132,7 @@ def train(ctx: click.Context, train: TrainInput):
     # NOTE: not sure what sample_1_of_n_eval_examples does, but required
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
         run_config=tf_config,
+        sample_1_of_n_eval_examples=1,
         hparams=model_hparams.create_hparams(None),
         pipeline_config_path=pipeline_config_path,
         train_steps=num_train_steps)
@@ -243,7 +236,7 @@ def train(ctx: click.Context, train: TrainInput):
     if comet:
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
         
-    result = TrainOutput(train.metadata, base_dir, Path(model_path), extra_files)
+    result = TrainOutput(Path(model_path), extra_files)
     return result
     
 
