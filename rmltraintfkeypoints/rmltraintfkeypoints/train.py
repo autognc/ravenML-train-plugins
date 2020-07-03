@@ -1,8 +1,11 @@
 import tensorflow as tf
 import numpy as np
+import traceback
+from keras_applications import mobilenet_v2, imagenet_utils
 import os
 import time
 from . import utils
+import cv2
 
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
@@ -18,16 +21,29 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         self.test_errors = []
         self.comet_step = 0
 
-    def assign_metric_ignore(self, y_true, y_pred):
+    def assign_metric(self, y_true, y_pred):
         self.targets.assign(y_true)
         self.outputs.assign(y_pred)
+        return 0
+
+    def assign_metric_mobilepose(self, y_true, y_pred):
+        self.targets.assign(y_true)
+        kps = KeypointsModel.decode_displacement_field(y_pred)  # shape (b, n, 2, h*w)
+        kps = tf.transpose(kps, [0, 3, 1, 2])
+        kps = tf.reshape(kps, [tf.shape(kps)[0], -1, 2])
+        # kps = tf.reduce_min(tf.math.top_k(kps, tf.shape(kps)[0] // 2, sorted=False).values, axis=-1)
+        self.outputs.assign(kps)
         return 0
 
     def calc_pose_error(self):
         label = KeypointsModel.decode_label(self.targets.numpy())
         kps_batch = self.outputs.numpy()
-        kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
+        if len(kps_batch.shape) == 2:
+            kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
         kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
+
+        # image = np.zeros([kps_batch.shape[0], self.crop_size, self.crop_size, 3], dtype=np.uint8)
+
         error_batch = np.zeros(kps_batch.shape[0])
         for i, kps in enumerate(kps_batch):
             r_vec, t_vec, _, _ = utils.calculate_pose_vectors(
@@ -41,6 +57,14 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
             )
 
             error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i].numpy())
+
+            """for kp_idx in range(0, len(kps), len(self.ref_points)):
+                y = int(kps[kp_idx, 0])
+                x = int(kps[kp_idx, 1])
+                cv2.circle(image[i], (x, y), 3, (0, 255, 255), -1)
+            cv2.imshow('asdf', image[i])
+            cv2.waitKey(0)"""
+
         return error_batch
 
     def on_epoch_begin(self, epoch, logs=None):
@@ -134,6 +158,7 @@ class KeypointsModel:
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed['image/height'], tf.float32)
             width = tf.cast(parsed['image/width'], tf.float32)
+            pose = parsed['image/object/pose']
             xmin = parsed['image/object/bbox/xmin'].values[0] * width
             xmax = parsed['image/object/bbox/xmax'].values[0] * width
             ymin = parsed['image/object/bbox/ymin'].values[0] * height
@@ -159,11 +184,22 @@ class KeypointsModel:
                 # random multiple of 90 degree rotation
                 k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
                 angle = tf.cast(k, tf.float32) * (np.pi / 2)
+                # adjust keypoints
                 cos = tf.cos(angle)
                 sin = tf.sin(angle)
                 rot_matrix = tf.convert_to_tensor([[cos, -sin], [sin, cos]])
                 keypoints = tf.reshape(keypoints, [-1, 2])[..., None]
                 keypoints = tf.reshape(tf.linalg.matmul(rot_matrix, keypoints), [-1])
+                # adjust pose
+                # TODO I don't think this works, at least not on SPEED
+                w = tf.cos(angle / 2)
+                z = tf.sin(angle / 2)
+                wn = w * pose[0] - z * pose[3]
+                xn = w * pose[1] - z * pose[2]
+                yn = z * pose[1] + w * pose[2]
+                zn = w * pose[3] + z * pose[0]
+                pose = tf.stack([wn, xn, yn, zn], axis=-1)
+                # adjust image
                 image = tf.image.rot90(image, k)
 
 
@@ -179,7 +215,7 @@ class KeypointsModel:
 
             truth = self.encode_label(
                 keypoints=keypoints,
-                pose=parsed['image/object/pose'],
+                pose=pose,
                 height=height,
                 width=width,
                 bbox_size=bbox_size,
@@ -223,6 +259,7 @@ class KeypointsModel:
         for i, phase in enumerate(self.hp['phases']):
             phase_logdir = os.path.join(logdir, f"phase_{i}")
             model_path = os.path.join(phase_logdir, "model.h5")
+            model_path_latest = os.path.join(phase_logdir, "model-latest.h5")
             callbacks = [
                 tf.keras.callbacks.TensorBoard(
                     log_dir=phase_logdir,
@@ -235,7 +272,12 @@ class KeypointsModel:
                     save_best_only=True,
                     mode='min'
                 ),
-                # TODO not break w/unet: pose_error_callback
+                tf.keras.callbacks.ModelCheckpoint(
+                    model_path_latest,
+                    save_best_only=False,
+                ),
+                # TODO not break w/unet
+                pose_error_callback
             ]
 
             # if this is the first phase, generate a new model with fresh weights.
@@ -244,7 +286,8 @@ class KeypointsModel:
                 model = {
                     'mobilenet': self._gen_model_mobilenet,
                     'densenet': self._gen_model_densenet,
-                    'unet': self._get_custom_unet
+                    'unet': self._get_custom_unet,
+                    'mobilepose': self._gen_model_mobilepose,
                 }[self.hp['model_arch']]()
             else:
                 model = tf.keras.models.load_model(
@@ -261,10 +304,16 @@ class KeypointsModel:
             print(model.summary())
 
             optimizer = self.OPTIMIZERS[phase['optimizer']](**phase['optimizer_args'])
+            if self.hp['model_arch'] == 'mobilepose':
+                assign_metric = pose_error_callback.assign_metric_mobilepose
+                loss = self.get_mobilepose_loss(model.output_shape[-3:-1])
+            else:
+                assign_metric = pose_error_callback.assign_metric
+                loss = self.make_mse_loss(keypoints_mode=self.keypoints_mode),
             model.compile(
                 optimizer=optimizer,
-                loss=KeypointsModel.make_mse_loss(keypoints_mode=self.keypoints_mode),
-                metrics=[pose_error_callback.assign_metric_ignore],
+                loss=loss,
+                metrics=[assign_metric],
             )
             try:
                 model.fit(
@@ -276,10 +325,12 @@ class KeypointsModel:
                     callbacks=callbacks
                 )
             except Exception:
+                print(traceback.format_exc())
                 return model_path
             finally:
                 if experiment:
                     experiment.log_model(f'phase_{i}', model_path)
+                    experiment.log_model(f'phase_{i}', model_path_latest)
 
         return model_path
 
@@ -288,7 +339,7 @@ class KeypointsModel:
         assert init_weights in ['imagenet', '']
         keras_app_args = dict(
             include_top=False, weights=init_weights if init_weights != '' else None, 
-            input_shape=(self.crop_size, self.crop_size, 3), 
+            input_shape=(self.crop_size, self.crop_size, 3),
             pooling='max'
         )
         keras_app_model = tf.keras.applications.MobileNetV2(**keras_app_args)
@@ -305,7 +356,7 @@ class KeypointsModel:
         assert init_weights in ['imagenet', '']
         keras_app_args = dict(
             include_top=False, weights=init_weights if init_weights != '' else None, 
-            input_shape=(self.crop_size, self.crop_size, 3), 
+            input_shape=(self.crop_size, self.crop_size, 3),
             pooling='max'
         )
         keras_app_model = tf.keras.applications.densenet.DenseNet121(**keras_app_args)
@@ -316,6 +367,76 @@ class KeypointsModel:
             x = tf.keras.layers.Dense(self.hp['fc_width'], activation='relu')(x)
         x = tf.keras.layers.Dense(self.nb_keypoints * 2)(x)
         return tf.keras.models.Model(app_in, x)
+
+    def _gen_model_mobilepose(self):
+        init_weights = self.hp.get('model_init_weights', '')
+        assert init_weights in ['imagenet', '']
+        mobilenet = tf.keras.applications.MobileNetV2(
+            include_top=False,
+            weights=init_weights if init_weights != '' else None,
+            input_shape=(self.crop_size, self.crop_size, 3),
+            pooling=None,
+            alpha=1.0
+        )
+        x = mobilenet.get_layer('block_15_add').output
+
+        # 7x7x160 -> 14x14x96
+        x = tf.keras.layers.Conv2DTranspose(
+            filters=96,
+            kernel_size=3,
+            strides=2,
+            padding='same',
+            use_bias=False
+        )(x)
+        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+        x = tf.keras.layers.ReLU(6.)(x)
+        x = tf.keras.layers.concatenate([x, mobilenet.get_layer('block_12_add').output])
+        x = mobilenet_v2._inverted_res_block(x, filters=96, alpha=1.0, stride=1,
+                                             expansion=6, block_id=17)
+        x = mobilenet_v2._inverted_res_block(x, filters=96, alpha=1.0, stride=1,
+                                             expansion=6, block_id=18)
+
+        # 14x14x96 -> 28x28x32
+        x = tf.keras.layers.Conv2DTranspose(
+            filters=32,
+            kernel_size=3,
+            strides=2,
+            padding='same',
+            use_bias=False
+        )(x)
+        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+        x = tf.keras.layers.ReLU(6.)(x)
+        x = tf.keras.layers.concatenate([x, mobilenet.get_layer('block_5_add').output])
+        x = mobilenet_v2._inverted_res_block(x, filters=32, alpha=1.0, stride=1,
+                                             expansion=6, block_id=19)
+        x = mobilenet_v2._inverted_res_block(x, filters=32, alpha=1.0, stride=1,
+                                             expansion=6, block_id=20)
+
+        # 28x28x32 -> 56x56x24
+        x = tf.keras.layers.Conv2DTranspose(
+            filters=24,
+            kernel_size=3,
+            strides=2,
+            padding='same',
+            use_bias=False
+        )(x)
+        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+        x = tf.keras.layers.ReLU(6.)(x)
+        x = tf.keras.layers.concatenate([x, mobilenet.get_layer('block_2_add').output])
+        x = mobilenet_v2._inverted_res_block(x, filters=24, alpha=1.0, stride=1,
+                                             expansion=6, block_id=21)
+        x = mobilenet_v2._inverted_res_block(x, filters=24, alpha=1.0, stride=1,
+                                             expansion=6, block_id=22)
+
+        x = tf.keras.layers.SpatialDropout2D(self.hp['dropout'])(x)
+
+        # output 1x1 conv
+        x = tf.keras.layers.Conv2D(
+            self.nb_keypoints * 2,
+            kernel_size=1,
+            use_bias=True
+        )(x)
+        return tf.keras.models.Model(mobilenet.input, x, name='mobilepose')
 
     def _get_custom_unet(self):
         from keras_unet.models import custom_unet
@@ -370,22 +491,6 @@ class KeypointsModel:
             raise NotImplementedError(keypoints_mode)
 
     @staticmethod
-    def get_pose_error_metric(ref_points, focal_length=1422):
-        def pose_error_metric(y_true, y_pred):
-            label = KeypointsModel.decode_label(y_true)
-            kps_batch = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1, 2])
-            kps_batch = kps_batch * (label['bbox_size'] // 2)[:, None, None] + label['centroid'][:, None, :]
-            # kps_batch = kps_batch.numpy()
-            error_batch = tf.zeros([tf.shape(kps_batch)[0]])
-            for i, kps in enumerate(kps_batch):
-                r_vec, t_vec, _, _ = utils.calculate_pose_vectors(
-                    ref_points, kps,
-                    focal_length, label['height'][i])
-                error_batch[i] = utils.geodesic_error(r_vec, label['pose'][i])
-            return error_batch
-        return pose_error_metric
-
-    @staticmethod
     def encode_label(*, keypoints, pose, height, width, bbox_size, centroid, keypoints_mode):
         if len(keypoints.shape) == 3 and keypoints_mode == 'coords':
             keypoints = tf.reshape(keypoints, [tf.shape(keypoints)[0], -1])
@@ -422,6 +527,48 @@ class KeypointsModel:
         }
 
     @staticmethod
+    def get_mobilepose_loss(dfdims):
+        def mobilepose_loss(y_true, y_pred):
+            kps = KeypointsModel.decode_label(y_true)['keypoints']
+            df_true = KeypointsModel.encode_displacement_field(kps, dfdims)
+            df_true_flat = tf.reshape(df_true, [tf.shape(df_true)[0], -1])
+            df_pred_flat = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
+            return tf.keras.losses.mean_absolute_error(df_true_flat, df_pred_flat)
+        return mobilepose_loss
+
+    @staticmethod
+    def encode_displacement_field(keypoints, dfdims):
+        """
+        :param keypoints: a shape (b, n, 2) Tensor with N keypoints normalized to (-1, 1)
+        :param dfdims: a shape [2] Tensor with the dimensions of the displacement field
+        :return: a shape (b, height, width, 2n) Tensor
+        """
+        delta = 2 / tf.convert_to_tensor(dfdims, dtype=tf.float32)
+        y_range = tf.range(-1, 1, delta[0]) + (delta[0] / 2)
+        x_range = tf.range(-1, 1, delta[1]) + (delta[1] / 2)
+        mgrid = tf.stack(tf.meshgrid(y_range, x_range, indexing='ij'), axis=-1)  # shape (y, x, 2)
+        df = keypoints[:, :, None, None, :] - mgrid  # shape (b, n, y, x, 2)
+        df = tf.transpose(df, [0, 2, 3, 1, 4])  # shape (b, y, x, n, 2)
+        return tf.reshape(df, [tf.shape(keypoints)[0], dfdims[0], dfdims[1], -1])
+
+
+    @staticmethod
+    def decode_displacement_field(df):
+        """
+        :param df: a shape (b, height, width, 2n) displacement field
+        :return: a shape (b, n, 2, height * width) tensor where each keypoint has height * width predictions
+        """
+        dfdims = tf.shape(df)[1:3]
+        df = tf.reshape(df, [tf.shape(df)[0], dfdims[0], dfdims[1], -1, 2])  # shape (b, y, x, n, 2)
+        delta = tf.cast(2 / dfdims, tf.float32)
+        y_range = tf.range(-1, 1, delta[0]) + (delta[0] / 2)
+        x_range = tf.range(-1, 1, delta[1]) + (delta[1] / 2)
+        mgrid = tf.stack(tf.meshgrid(y_range, x_range, indexing='ij'), axis=-1)  # shape (y, x, 2)
+        keypoints = df + mgrid[:, :, None, :]  # shape (b, y, x, n, 2)
+        keypoints = tf.reshape(keypoints, [tf.shape(df)[0], dfdims[0] * dfdims[1], -1, 2])  # shape (b, y*x, n, 2)
+        return tf.transpose(keypoints, [0, 2, 3, 1])
+
+    @staticmethod
     def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints, keypoints_mode='coords'):
         def _get_image_coords():
             keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
@@ -431,12 +578,9 @@ class KeypointsModel:
             y_coords *= img_size[1]
             return x_coords, y_coords
         if keypoints_mode == 'coords':
-            xc, yc = _get_image_coords()
-            xc -= centroid[0]
-            yc -= centroid[1]
-            xc /= (bbox_size // 2)
-            yc /= (bbox_size // 2)
-            return tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints * 2,))
+            keypoints = tf.reshape(parsed_kps, [-1, 2])[:nb_keypoints]
+            keypoints = (keypoints - centroid) / (bbox_size / 2)
+            return tf.reshape(keypoints, [nb_keypoints * 2])
         elif keypoints_mode == 'mask':
             xc, yc = _get_image_coords()
             xc -= centroid[0] - (bbox_size // 2)

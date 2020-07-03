@@ -86,6 +86,8 @@ def train(ctx, train: TrainInput, config, comet):
         if experiment:
             stack.enter_context(experiment.train())
         model_path = trainer.train(artifact_dir, experiment)
+    if experiment:
+        experiment.end()
 
     # get Tensorboard files
     # FIXME: The directory structure is very important for interpreting the Tensorboard logs
@@ -102,7 +104,7 @@ def train(ctx, train: TrainInput, config, comet):
 
 @tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
-@click.option('--pnp_focal_length', default=1422)
+@click.option('--pnp_focal_length', default=1422.0)
 @click.option('--plot', is_flag=True)
 @click.option('--render_poses', is_flag=True)
 @pass_train
@@ -111,10 +113,14 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     if train.artifact_path is None:
         train.artifact_path = os.path.join(os.getcwd(), 'local_artifacts')
         os.makedirs(train.artifact_path, exist_ok=True)
-    errs = []
+    errs_pose = []
+    errs_position = [0]
     errs_by_keypoint = []
     model = tf.keras.models.load_model(model_path, compile=False)
-    nb_keypoints = model.output.shape[1] // 2
+    if model.name == 'mobilepose':
+        nb_keypoints = model.output.shape[-1] // 2
+    else:
+        nb_keypoints = model.output.shape[1] // 2
     cropsize = model.input.shape[1]
     ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
 
@@ -123,7 +129,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     model.compile(
         optimizer=tf.keras.optimizers.SGD(),
         loss=KeypointsModel.make_mse_loss(keypoints_mode='coords'), # TODO check if mask
-        metrics=[pose_error_callback.assign_metric_ignore]
+        metrics=[pose_error_callback.assign_metric]
     )
 
     test_data = data_utils.dataset_from_directory(train.dataset.path / "test", cropsize, nb_keypoints)
@@ -131,7 +137,12 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     img_cnt = 0
     for image_batch, truth_batch in tqdm.tqdm(test_data):
         kps_batch = model.predict(image_batch)
-        kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
+        if model.name == 'mobilepose':
+            kps_batch = KeypointsModel.decode_displacement_field(kps_batch)
+            kps_batch = tf.transpose(kps_batch, [0, 3, 1, 2])
+            kps_batch = tf.reshape(kps_batch, [tf.shape(kps_batch)[0], -1, 2]).numpy()
+        else:
+            kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         kps_true_batch = (truth_batch['keypoints'] - truth_batch['centroid'][:, None, :])\
             / truth_batch['bbox_size'][:, None, None] * cropsize + (cropsize // 2)
@@ -146,7 +157,11 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
                     'imdims': truth_batch['imdims'][i],
                 }
             )
-            errs.append(utils.geodesic_error(r_vec, truth_batch['pose'][i]))
+            errs_pose.append(utils.geodesic_error(r_vec, truth_batch['pose'][i]))
+            # errs_position.append(
+                # np.linalg.norm(truth_batch['position'][i] - np.squeeze(t_vec)) / np.linalg.norm(truth_batch['position'][i])
+            # )
+            # TODO doesn't use all guesses for mobilepose
             errs_by_keypoint.append([
                 np.linalg.norm(kp_true - kp)
                 for kp, kp_true in zip(kps, kps_true)
@@ -175,22 +190,24 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
                             cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             img_cnt += 1
 
-    np.save(f'{train.artifact_path}/pose_errs.npy', np.array(errs))
+    np.save(f'{train.artifact_path}/pose_errs.npy', np.array(errs_pose))
+    np.save(f'{train.artifact_path}/position_errs.npy', np.array(errs_position))
     np.save(f'{train.artifact_path}/keypoint_errs.npy', np.array(errs_by_keypoint))
     _display_keypoint_stats(errs_by_keypoint)
-    _display_geodesic_stats('Model Preds', errs, plot=plot)
+    _display_geodesic_stats('Model Preds', np.array(errs_pose), np.array(errs_position), plot=plot)
 
 
 @tf_keypoints.command(help="Evaluate ground truth PnP.")
 @click.option('--keypoints', default=20)
-@click.option('--pnp_focal_length', default=1422)
+@click.option('--pnp_focal_length', default=1422.0)
 @click.option('--swap_random_percent', default=0, help="Randomly swap keypoints to test pnp.")
 @pass_train
 @click.pass_context
 def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
     assert train.artifact_path is not None, "Please run in local mode."
     nb_keypoints = keypoints
-    errs = []
+    errs_pose = []
+    errs_position = [0]
 
     rand_swap_amt = int(swap_random_percent / 100 * nb_keypoints)
     if rand_swap_amt > 0:
@@ -202,7 +219,7 @@ def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
         with open(meta_file, 'r') as f:
             metadata = json.load(f)
         # FIXME: don't hardcode image resolution
-        kps = np.array(metadata['keypoints']) * 1024
+        kps = np.array(metadata['keypoints'], np.float32) * 1024
         pose = metadata['pose']
 
         if rand_swap_amt > 0:
@@ -214,23 +231,42 @@ def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
         r_vec, t_vec, cam_matrix, coefs = utils.calculate_pose_vectors(
             ref_points[:nb_keypoints], kps[:nb_keypoints],
             [pnp_focal_length, pnp_focal_length], [1024, 1024])
-        err = utils.geodesic_error(r_vec, pose)
-        errs.append(err)
+        errs_pose.append(utils.geodesic_error(r_vec, pose))
+        # position = np.array(metadata['position'])
+        # errs_position.append(
+            # np.linalg.norm(position - np.squeeze(t_vec)) / np.linalg.norm(position)
+        # )
 
-    _display_geodesic_stats('PnP on truth, |kps|={})'.format(nb_keypoints), errs)
+    _display_geodesic_stats('PnP on truth, |kps|={})'.format(nb_keypoints), errs_pose, errs_position)
 
 
-def _display_geodesic_stats(title, errs, plot=False):
+def _display_geodesic_stats(title, errs_pose, errs_position, plot=False):
     print(f'\n---- Geodesic Error Stats ({title}) ----')
     stats = {
-        'mean': np.mean(errs),
-        'median': np.median(errs),
-        'max': np.max(errs)
+        'mean': np.mean(errs_pose),
+        'median': np.median(errs_pose),
+        'max': np.max(errs_pose)
     }
     for label, val in stats.items():
         print(f'{label:8s} = {val:.3f} ({np.degrees(val):.3f} deg)')
+    print(f'\n---- Position Error Stats ({title}) ----')
+    stats = {
+        'mean': np.mean(errs_position),
+        'median': np.median(errs_position),
+        'max': np.max(errs_position)
+    }
+    for label, val in stats.items():
+        print(f'{label:8s} = {val:.3f}')
+    print(f'\n---- Combined Error Stats ({title}) ----')
+    stats = {
+        'mean': np.mean(errs_position + errs_pose),
+        'median': np.median(errs_position + errs_pose),
+        'max': np.max(errs_position + errs_pose)
+    }
+    for label, val in stats.items():
+        print(f'{label:8s} = {val:.3f}')
     if plot:
-        plt.hist([np.degrees(val) for val in errs])
+        plt.hist([np.degrees(val) for val in errs_pose])
         plt.title(title)
         plt.show()
 

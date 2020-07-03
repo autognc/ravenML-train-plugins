@@ -1,13 +1,16 @@
 from scipy.spatial.transform import Rotation
 import numpy as np
 import cv2
+import time
 
 
 def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None):
     """
     Calculates pose vectors using CV2's solvePNP.
-    :param ref_points: 3D reference points (Nx3 array)
-    :param keypoints: 2D image keypoints in (y, x) pixel coordinates (Nx2 array)
+    :param ref_points: 3D reference points, shape (n, 3)
+    :param keypoints: 2D image keypoints in (y, x) pixel coordinates. Shape (m, 2), where m>=n and m is a
+        multiple of n. If m is greater than n, then keypoints will be intepreted as m // n guesses at the
+        location of each 3D keypoint. These guesses should be in guess-major order: i.e. (num_guesses, n).reshape(-1).
     :param focal_length: original camera focal length (vertical, horizontal)
     :param imdims: (height, width) current image dimensions
     :param extra_crop_params: a optional dict with extra parameters that are necessary to
@@ -31,12 +34,30 @@ def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_cr
         [0, focal_length[0], center[0]],
         [0, 0, 1]
     ], dtype=np.float32)
+
+    assert len(keypoints) % len(ref_points) == 0
+    if len(keypoints) > len(ref_points):
+        ransac = True
+        ref_points = np.tile(ref_points, [len(keypoints) // len(ref_points), 1])
+    else:
+        ransac = False
+
     keypoints = keypoints.copy()
     keypoints[:, [0, 1]] = keypoints[:, [1, 0]]
-    ret, r_vec, t_vec = cv2.solvePnP(
-        ref_points, keypoints,
-        cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP)
-    assert ret, 'Pose solve failed.'
+    if not ransac:
+        ret, r_vec, t_vec = cv2.solvePnP(
+            ref_points, keypoints,
+            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP)
+    else:
+        # t = time.time()
+        ret, r_vec, t_vec, inliers = cv2.solvePnPRansac(
+            ref_points, keypoints,
+            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP
+        )
+        # print(f'Time: {time.time() - t:.2f}, inliers: {len(inliers) if inliers is not None else 0}')
+    if not ret:
+        print('Pose solve failed')
+        r_vec, t_vec = np.zeros([2, 3], dtype=np.float32)
     return r_vec, t_vec, cam_matrix, dist_coeffs
 
 

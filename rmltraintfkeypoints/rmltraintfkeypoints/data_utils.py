@@ -40,6 +40,7 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints):
 
     def process(image_file, metadata):
         # load bounding box
+        # TODO don't hardcode key, maybe
         bbox = metadata['bboxes']['cygnus']
         xmin = bbox['xmin']
         xmax = bbox['xmax']
@@ -52,13 +53,14 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints):
         image_data = tf.io.read_file(image_file)
         imdims, image = KeypointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
 
-        keypoints = metadata['keypoints'][:nb_keypoints] * imdims
+        keypoints = tf.cast(metadata['keypoints'][:nb_keypoints], tf.float32) * imdims
         truth = {
             'keypoints': keypoints,
             'pose': tf.ensure_shape(metadata['pose'], [4]),
             'bbox_size': tf.ensure_shape(bbox_size, []),
             'centroid': tf.ensure_shape(centroid, [2]),
-            'imdims': imdims
+            'imdims': imdims,
+            # 'position': tf.ensure_shape(metadata['position'], [3])
         }
         return image, truth
 
