@@ -2,16 +2,16 @@
   "keypoints": 20,
   "fc_width": 512,
   "fc_count": 1,
-  "batch_size": 16,
+  "batch_size": 96,
   "cache_train_data": false,
   "prefetch_num_batches": 5,
-  "epochs": 100,
-  "crop_size": 250,
+  "crop_size": 224,
   "shuffle_buffer_size": 8192,
-  "model_arch": "densenet",
+  "model_arch": "mobilenet",
   "model_init_weights": "imagenet",
-  "optimizer": "Adam",
-  "optimizer_args": {"lr": 0.001},
-  "pnp_focal_length": 1422,
-  "pnp_crop_size": 1024
+  "model_unet_params": {},
+  "phases": [
+    {"optimizer":  "Adam", "optimizer_args":  {"learning_rate": 0.001}, "epochs": 100, "start_layer": "input_1"}
+  ],
+  "pnp_focal_length": 1422
 }
