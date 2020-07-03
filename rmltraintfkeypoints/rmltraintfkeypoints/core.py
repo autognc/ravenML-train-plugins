@@ -2,6 +2,8 @@ import tqdm
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import user_confirms
+from ravenml.utils.dataset import get_dataset
+from ravenml.utils.plugins import raise_parameter_error
 from datetime import datetime
 import matplotlib.pyplot as plt
 from comet_ml import Experiment
@@ -17,7 +19,6 @@ import os
 import cv2
 from scipy.spatial.transform import Rotation
 
-from ravenml.utils.local_cache import LocalCache, global_cache
 from .train import KeypointsModel, PoseErrorCallback
 from . import utils, data_utils
 
@@ -29,45 +30,30 @@ def tf_keypoints():
 
 @tf_keypoints.command(help="Train a model.")
 @pass_train
-@click.option("--config", "-c", type=click.Path(exists=True), required=True)
 @click.option("--comet", type=str, help="Enable comet integration under an experiment by this name", default=None)
 @click.pass_context
-def train(ctx, train: TrainInput, config, comet):
+def train(ctx, train: TrainInput, comet):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
-    # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train".
-    # After training, create an instance of TrainOutput and return it
+    # object creation, after which execution will fail as this means
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
+
+    # NOTE: after training, you must create an instance of TrainOutput and return it
 
     # set base directory for model artifacts
-    artifact_dir = (LocalCache(global_cache.path / 'tf-keypoints').path if train.artifact_path is None \
-                        else train.artifact_path) / 'artifacts'
-
-    if os.path.exists(artifact_dir):
-        if user_confirms('Artifact storage location contains old data. Overwrite?'):
-            shutil.rmtree(artifact_dir)
-        else:
-            return ctx.exit()
-    os.makedirs(artifact_dir)
+    artifact_dir = train.artifact_path
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
     keypoints_path = train.dataset.path / "keypoints.npy"
 
-    with open(config, "r") as f:
-        hyperparameters = json.load(f)
+    hyperparameters = train.plugin_config
 
     keypoints_3d = np.load(keypoints_path)
 
     # fill metadata
-    metadata = {
-        'architecture': 'keypoints_regression',
-        'date_started_at': datetime.utcnow().isoformat() + "Z",
-        'dataset_used': train.dataset.name,
-        'config': hyperparameters
-    }
-    with open(artifact_dir / 'metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2)
+    train.plugin_metadata['architecture'] = 'keypoints_regression'
+    train.plugin_metadata['config'] = hyperparameters
 
     experiment = None
     if comet:
@@ -76,7 +62,6 @@ def train(ctx, train: TrainInput, config, comet):
         experiment.log_parameters(hyperparameters)
         experiment.set_os_packages()
         experiment.set_pip_packages()
-        experiment.log_asset_data(metadata, name='metadata.json')
 
     # run training
     print("Beginning training. Hyperparameters:")
@@ -99,20 +84,32 @@ def train(ctx, train: TrainInput, config, comet):
             if "events.out.tfevents" in filename:
                 extra_files.append(os.path.join(dirpath, filename))
 
-    return TrainOutput(metadata, artifact_dir, model_path, extra_files, train.artifact_path is not None)
+    return TrainOutput(model_path, extra_files)
 
 
 @tf_keypoints.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument('model_path', type=click.Path(exists=True))
+@click.argument('dataset_name', type=str)
+@click.argument('output_path', type=click.Path(exists=False))
 @click.option('--pnp_focal_length', default=1422.0)
 @click.option('--plot', is_flag=True)
 @click.option('--render_poses', is_flag=True)
-@pass_train
 @click.pass_context
-def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=False):
-    if train.artifact_path is None:
-        train.artifact_path = os.path.join(os.getcwd(), 'local_artifacts')
-        os.makedirs(train.artifact_path, exist_ok=True)
+def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=False, render_poses=False):
+    # ensure dataset exists and get its path
+    try:
+        dataset = get_dataset(dataset_name)
+    # exit if the dataset could not be found on S3
+    except ValueError as e:
+        raise_parameter_error(dataset_name, 'dataset name')
+
+    if os.path.exists(output_path):
+        if user_confirms('Artifact storage location contains old data. Overwrite?'):
+            shutil.rmtree(output_path)
+        else:
+            return ctx.exit()
+    os.makedirs(output_path)
+
     errs_pose = []
     errs_position = [0]
     errs_by_keypoint = []
@@ -122,7 +119,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     else:
         nb_keypoints = model.output.shape[1] // 2
     cropsize = model.input.shape[1]
-    ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
+    ref_points = np.load(dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
 
     pose_error_callback = PoseErrorCallback(ref_points, cropsize, pnp_focal_length)
 
@@ -132,7 +129,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
         metrics=[pose_error_callback.assign_metric]
     )
 
-    test_data = data_utils.dataset_from_directory(train.dataset.path / "test", cropsize, nb_keypoints)
+    test_data = data_utils.dataset_from_directory(dataset.path / "test", cropsize, nb_keypoints)
     test_data = test_data.batch(32)
     img_cnt = 0
     for image_batch, truth_batch in tqdm.tqdm(test_data):
@@ -186,25 +183,31 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
                 cv2.line(image, (p3[0], p3[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p1[0], p1[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p2[0], p2[1]), (p4[0], p4[1]), (255, 0, 255), 6)
-                cv2.imwrite(f'{train.artifact_path}/pose-render-{img_cnt:04d}.png',
+                cv2.imwrite(f'{artifact_path}/pose-render-{img_cnt:04d}.png',
                             cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             img_cnt += 1
 
-    np.save(f'{train.artifact_path}/pose_errs.npy', np.array(errs_pose))
-    np.save(f'{train.artifact_path}/position_errs.npy', np.array(errs_position))
-    np.save(f'{train.artifact_path}/keypoint_errs.npy', np.array(errs_by_keypoint))
+    np.save(f'{output_path}/pose_errs.npy', np.array(errs_pose))
+    np.save(f'{output_path}/position_errs.npy', np.array(errs_position))
+    np.save(f'{output_path}/keypoint_errs.npy', np.array(errs_by_keypoint))
     _display_keypoint_stats(errs_by_keypoint)
     _display_geodesic_stats('Model Preds', np.array(errs_pose), np.array(errs_position), plot=plot)
 
 
 @tf_keypoints.command(help="Evaluate ground truth PnP.")
+@click.argument('dataset_name', type=str)
 @click.option('--keypoints', default=20)
 @click.option('--pnp_focal_length', default=1422.0)
 @click.option('--swap_random_percent', default=0, help="Randomly swap keypoints to test pnp.")
-@pass_train
 @click.pass_context
-def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
-    assert train.artifact_path is not None, "Please run in local mode."
+def evalpnp(ctx, dataset_name, keypoints, pnp_focal_length, swap_random_percent):
+    # ensure dataset exists and get its path
+    try:
+        dataset = get_dataset(dataset_name)
+    # exit if the dataset could not be found on S3
+    except ValueError as e:
+        raise_parameter_error(dataset_name, 'dataset name')
+
     nb_keypoints = keypoints
     errs_pose = []
     errs_position = [0]
@@ -213,8 +216,8 @@ def evalpnp(ctx, train, keypoints, pnp_focal_length, swap_random_percent):
     if rand_swap_amt > 0:
         print('WARN: Randomly swapping {} keypoints.'.format(rand_swap_amt))
 
-    ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))
-    meta_files = sorted(glob.glob(str(train.dataset.path / 'test' / "meta_*.json")))
+    ref_points = np.load(dataset.path / "keypoints.npy").reshape((-1, 3))
+    meta_files = sorted(glob.glob(str(dataset.path / 'test' / "meta_*.json")))
     for meta_file in tqdm.tqdm(meta_files):
         with open(meta_file, 'r') as f:
             metadata = json.load(f)
