@@ -36,11 +36,13 @@ def prepare_for_training(
     to given metadata dictionary.
 
     Args:
+        bbox_cache (RMLCache): cache object for the instance plugin
         base_dir (Path): root of training directory
         data_path (Path): path to dataset
         arch_path (Path): path to model architecture directory
         model_type (str): name of model type (i.e, ssd_inception_v1)
         metadata (dict): metadata dictionary to add fields to
+        config (dict): plugin config from user provided config yaml
 
     Returns:
         bool: True if successful, False otherwise
@@ -105,7 +107,7 @@ def prepare_for_training(
     # create custom config if necessary
     user_config = default_config
     if not config.get('use_default_config'):
-        if config.get('hyperparemeters'):
+        if config.get('hyperparameters'):
             user_config = _process_user_hyperparameters(user_config, config['hyperparameters'])
         else:
             user_config = _configuration_prompt(user_config)
@@ -201,6 +203,7 @@ def download_model_arch(model_name: str, instance_cache: RMLCache):
 
     Args:
         model_name (str): model type
+        bbox_cache (RMLCache): cache object for the instance plugin plugin
     
     Returns:
         Path: path to model architecture
@@ -251,7 +254,8 @@ def _configuration_prompt(current_config: dict):
 def _print_config(msg: str, config: dict):
     """Prints the given training configuration with colorization.
 
-    Args:
+    Args:   
+        msg (str): messsage to print prior to printing config
         config (dict): training configuration to print
     """
     click.echo(msg)
@@ -268,7 +272,6 @@ def _process_user_hyperparameters(current_config: dict, hyperparameters: dict):
     Returns:
         dict: updated training configuration
     """
-    # TODO: better format checking here (handling spaces, misformatted HP)
     for parameter in hyperparameters.keys():
         if(parameter not in current_config):
             hint = f'hyperparameters, {parameter} is not supported for this model architecture.'

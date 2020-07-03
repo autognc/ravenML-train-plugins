@@ -20,18 +20,15 @@ import re
 import glob
 import json
 import traceback
+import rmltraintfbbox.validation.utils as utils
 from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
-from schema import Schema, Optional
-from ravenml.options import verbose_opt
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
 from ravenml.utils.plugins import raise_parameter_error
-from rmltraintfbbox.options import option_decorator
 from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch
-import rmltraintfbbox.validation.utils as utils
 from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
@@ -40,7 +37,6 @@ from google.protobuf import text_format
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
 ### OPTIONS ###
-# defined in options.py for this plugin
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
@@ -55,15 +51,17 @@ def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train"
+    # object creation, after which execution will fail as this means 
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
     
     # NOTE: after training, you must create an instance of TrainOutput and return it
+    
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
 
     ## SET UP CONFIG ##
     config = train.plugin_config
-    metadata = train.metadata[train.plugin_metadata_field]
+    metadata = train.plugin_metadata
     comet = config.get('comet')
 
     # set up TF verbosity
@@ -212,7 +210,7 @@ def train(ctx: click.Context, train: TrainInput):
     with open(base_dir / 'metadata.json', 'w') as f:
         json.dump(train.metadata, f, indent=2)
         
-    result = TrainOutput(train.metadata, base_dir, Path(model_path), extra_files)
+    result = TrainOutput(Path(model_path), extra_files)
     return result
     
 
