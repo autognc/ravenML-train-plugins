@@ -180,7 +180,8 @@ class KeypointsModel:
                 centroid, bbox_size, cropsize, old_dims, self.nb_keypoints, keypoints_mode=self.keypoints_mode)
 
             # other augmentations
-            if train:
+            if train and self.keypoints_mode == 'coords':
+                # TODO support masked keypoints augmentation
                 # random multiple of 90 degree rotation
                 k = tf.random.uniform([], 0, 4, tf.int32)  # number of CCW 90-deg rotations
                 angle = tf.cast(k, tf.float32) * (np.pi / 2)
@@ -219,8 +220,7 @@ class KeypointsModel:
                 height=height,
                 width=width,
                 bbox_size=bbox_size,
-                centroid=centroid,
-                keypoints_mode=self.keypoints_mode
+                centroid=centroid
             )
             return image, truth
 
@@ -275,10 +275,11 @@ class KeypointsModel:
                 tf.keras.callbacks.ModelCheckpoint(
                     model_path_latest,
                     save_best_only=False,
-                ),
-                # TODO not break w/unet
-                pose_error_callback
+                )
             ]
+            if self.keypoints_mode != 'mask':
+                # TODO support unet
+                callbacks.append(pose_error_callback)
 
             # if this is the first phase, generate a new model with fresh weights.
             # otherwise, load the model from the previous phase's best checkpoint
@@ -303,17 +304,21 @@ class KeypointsModel:
                 layer.trainable = True
             print(model.summary())
 
+            metrics = []
             optimizer = self.OPTIMIZERS[phase['optimizer']](**phase['optimizer_args'])
             if self.hp['model_arch'] == 'mobilepose':
-                assign_metric = pose_error_callback.assign_metric_mobilepose
+                metrics.append(pose_error_callback.assign_metric_mobilepose)
                 loss = self.get_mobilepose_loss(model.output_shape[-3:-1])
+            elif self.hp['model_arch'] == 'unet':
+                # TODO support pose error metrics
+                loss = self.get_mask_loss(self.nb_keypoints, self.crop_size_rounded)
             else:
-                assign_metric = pose_error_callback.assign_metric
-                loss = self.make_mse_loss(keypoints_mode=self.keypoints_mode),
+                metrics.append(pose_error_callback.assign_metric)
+                loss = self.get_mse_loss()
             model.compile(
                 optimizer=optimizer,
                 loss=loss,
-                metrics=[assign_metric],
+                metrics=metrics,
             )
             try:
                 model.fit(
@@ -452,7 +457,7 @@ class KeypointsModel:
             use_attention=False,
             upsample_mode='deconv',
             dropout=0.3,
-            output_activation='linear'
+            output_activation='sigmoid'
         )
         # Override select model params with the config values.
         overridable_model_params = [
@@ -472,27 +477,8 @@ class KeypointsModel:
         return tf.keras.models.Model(unet_in, x)
 
     @staticmethod
-    def make_mse_loss(*, keypoints_mode):
-        def mse_loss_coords(y_true, y_pred):
-            kps = KeypointsModel.decode_label(y_true)['keypoints']
-            return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
-        def mse_loss_mask(y_true, y_pred):
-            kps = KeypointsModel.decode_label(y_true)['keypoints']
-            # TODO decoding seems to be build for coord method
-            # so `kps_fixed_shape` is required
-            # TODO pass in cropsize and nb_keypoints to compute shape
-            kps_fixed_shape = tf.reshape(kps, (-1, 1310720))
-            return tf.keras.losses.mse(kps_fixed_shape, y_pred)
-        if keypoints_mode == 'coords':
-            return mse_loss_coords
-        elif keypoints_mode == 'mask':
-            return mse_loss_mask
-        else:
-            raise NotImplementedError(keypoints_mode)
-
-    @staticmethod
-    def encode_label(*, keypoints, pose, height, width, bbox_size, centroid, keypoints_mode):
-        if len(keypoints.shape) == 3 and keypoints_mode == 'coords':
+    def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
+        if len(keypoints.shape) == 3:
             keypoints = tf.reshape(keypoints, [tf.shape(keypoints)[0], -1])
             return tf.concat((
                 tf.reshape(tf.cast(pose, tf.float32), [-1, 4]),
@@ -527,6 +513,21 @@ class KeypointsModel:
         }
 
     @staticmethod
+    def get_mse_loss():
+        def mse_loss(y_true, y_pred):
+            kps = KeypointsModel.decode_label(y_true)['keypoints']
+            return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
+        return mse_loss
+
+    @staticmethod
+    def get_mask_loss(nb_keypoints, mask_size):
+        def mask_loss(y_true, y_pred):
+            kps = KeypointsModel.decode_label(y_true)['keypoints']
+            kps_fixed_shape = tf.reshape(kps, (-1, nb_keypoints * mask_size * mask_size))
+            return tf.keras.losses.mse(kps_fixed_shape, y_pred)
+        return mask_loss
+
+    @staticmethod
     def get_mobilepose_loss(dfdims):
         def mobilepose_loss(y_true, y_pred):
             kps = KeypointsModel.decode_label(y_true)['keypoints']
@@ -550,7 +551,6 @@ class KeypointsModel:
         df = keypoints[:, :, None, None, :] - mgrid  # shape (b, n, y, x, 2)
         df = tf.transpose(df, [0, 2, 3, 1, 4])  # shape (b, y, x, n, 2)
         return tf.reshape(df, [tf.shape(keypoints)[0], dfdims[0], dfdims[1], -1])
-
 
     @staticmethod
     def decode_displacement_field(df):
@@ -599,8 +599,7 @@ class KeypointsModel:
                 dense_shape=(cropsize, cropsize, nb_keypoints)
             ))
             mask = tf.sparse.to_dense(mask_sparse, default_value=0.)
-            # TODO smooth the mask
-            return mask
+            return tf.reshape(mask, (-1,))
         else:
             raise NotImplementedError(keypoints_mode)
 

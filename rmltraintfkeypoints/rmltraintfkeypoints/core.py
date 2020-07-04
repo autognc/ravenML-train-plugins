@@ -31,8 +31,9 @@ def tf_keypoints():
 @pass_train
 @click.option("--config", "-c", type=click.Path(exists=True), required=True)
 @click.option("--comet", type=str, help="Enable comet integration under an experiment by this name", default=None)
+@click.option('--overwrite', is_flag=True)
 @click.pass_context
-def train(ctx, train: TrainInput, config, comet):
+def train(ctx, train: TrainInput, config, comet, overwrite):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
@@ -44,7 +45,7 @@ def train(ctx, train: TrainInput, config, comet):
                         else train.artifact_path) / 'artifacts'
 
     if os.path.exists(artifact_dir):
-        if user_confirms('Artifact storage location contains old data. Overwrite?'):
+        if overwrite or user_confirms('Artifact storage location ({}) contains old data. Overwrite?'.format(artifact_dir)):
             shutil.rmtree(artifact_dir)
         else:
             return ctx.exit()
@@ -128,7 +129,7 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
 
     model.compile(
         optimizer=tf.keras.optimizers.SGD(),
-        loss=KeypointsModel.make_mse_loss(keypoints_mode='coords'), # TODO check if mask
+        loss=KeypointsModel.get_mse_loss(), # TODO change for model type
         metrics=[pose_error_callback.assign_metric]
     )
 
