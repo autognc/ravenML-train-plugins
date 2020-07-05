@@ -582,25 +582,22 @@ class KeypointsModel:
             keypoints = (keypoints - centroid) / (bbox_size / 2)
             return tf.reshape(keypoints, [nb_keypoints * 2])
         elif keypoints_mode == 'mask':
-            xc, yc = _get_image_coords()
-            xc -= centroid[0]
-            yc -= centroid[1]
             resize_coef = cropsize / bbox_size
-            xc *= resize_coef
-            yc *= resize_coef
-            xc += cropsize // 2
-            yc += cropsize // 2
+            xc, yc = _get_image_coords()
+            xc = ((xc - centroid[0]) * resize_coef) + (cropsize // 2)
+            yc = ((yc - centroid[2]) * resize_coef) + (cropsize // 2)
             crop_coords = tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints, 2))
-            crop_coords_with_idx = tf.concat([
+            crop_coords = tf.clip_by_value(crop_coords, 0, cropsize)
+            crop_coords = tf.concat([
                 tf.cast(crop_coords, tf.int64), 
                 tf.reshape(tf.range(0, nb_keypoints, 1, dtype=tf.int64), (nb_keypoints, 1))
             ], axis=1)
-            mask_sparse = tf.sparse.reorder(tf.sparse.SparseTensor(
-                crop_coords_with_idx, 
+            mask = tf.sparse.reorder(tf.sparse.SparseTensor(
+                crop_coords, 
                 tf.ones((nb_keypoints,), dtype=tf.float32), 
                 dense_shape=(cropsize, cropsize, nb_keypoints)
             ))
-            mask = tf.sparse.to_dense(mask_sparse, default_value=0.)
+            mask = tf.sparse.to_dense(mask, default_value=0.)
             # TODO gaussian fancyness
             return tf.reshape(mask, (-1,))
         else:
