@@ -585,7 +585,7 @@ class KeypointsModel:
             resize_coef = cropsize / bbox_size
             xc, yc = _get_image_coords()
             xc = ((xc - centroid[0]) * resize_coef) + (cropsize // 2)
-            yc = ((yc - centroid[2]) * resize_coef) + (cropsize // 2)
+            yc = ((yc - centroid[1]) * resize_coef) + (cropsize // 2)
             crop_coords = tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints, 2))
             crop_coords = tf.clip_by_value(crop_coords, 0, cropsize)
             crop_coords = tf.concat([
