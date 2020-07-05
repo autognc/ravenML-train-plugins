@@ -18,33 +18,25 @@ import yaml
 import importlib
 import re
 import glob
-from contextlib import ExitStack
+import json
 import traceback
+import rmltraintfbbox.validation.utils as utils
+from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime
-from ravenml.options import verbose_opt
-from ravenml.train.options import kfold_opt, pass_train
+from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
-from ravenml.utils.plugins import fill_basic_metadata
-from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch, bbox_cache
-import rmltraintfbbox.validation.utils as utils
+from ravenml.utils.plugins import raise_parameter_error
+from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_arch
 from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 
-
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 
-
 ### OPTIONS ###
-# put any custom Click options you create here
-comet_opt = click.option(
-    '-c', '--comet', is_flag=True,
-    help='Enable comet on this training run.'
-)
-
 
 ### COMMANDS ###
 @click.group(help='TensorFlow Object Detection with bounding boxes.')
@@ -53,32 +45,33 @@ def tf_bbox(ctx):
     pass
     
 @tf_bbox.command(help='Train a model.')
-@verbose_opt
-@comet_opt
-# @kfold_opt
 @pass_train
 @click.pass_context
-def train(ctx, train: TrainInput, verbose: bool, comet: bool):
+def train(ctx: click.Context, train: TrainInput):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train"
+    # object creation, after which execution will fail as this means 
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
     
     # NOTE: after training, you must create an instance of TrainOutput and return it
+    
     # import necessary libraries
     cli_spinner("Importing TensorFlow...", _import_od)
-    if verbose:
+
+    ## SET UP CONFIG ##
+    config = train.plugin_config
+    metadata = train.plugin_metadata
+    comet = config.get('comet')
+
+    # set up TF verbosity
+    if config['verbose']:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
     else:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
     
-    # create training metadata dict and populate with basic information
-    metadata = {}
-    fill_basic_metadata(metadata, train.dataset)
-
     # set base directory for model artifacts 
-    base_dir = bbox_cache.path / 'temp' if train.artifact_path is None \
-                    else train.artifact_path
+    base_dir = train.artifact_path
  
     # load model choices from YAML
     models = {}
@@ -89,19 +82,27 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         except yaml.YAMLError as exc:
             print(exc)
     
-    # prompt for model selection
-    model_name = user_selects('Choose model', models.keys())
+    # prompt for model selection if not in config
+    model_name = config.get('model')
+    model_name = model_name if model_name else user_selects('Choose model', models.keys())
     # grab fields and add to metadata
-    model = models[model_name]
+    try:
+        model = models[model_name]
+    except KeyError as e:
+        hint = 'model name, model is not supported by this plugin.'
+        raise_parameter_error(model_name, hint)
+    
+    # extract information and add to metadata
     model_type = model['type']
     model_url = model['url']
     metadata['architecture'] = model_name
     
     # download model arch
-    arch_path = download_model_arch(model_url)
+    arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
-    if not prepare_for_training(base_dir, train.dataset.path, arch_path, model_type, metadata):
+    if not prepare_for_training(train.plugin_cache, train.artifact_path, train.dataset.path, 
+        arch_path, model_type, metadata, train.plugin_config):
         ctx.exit('Training cancelled.')
 
     model_dir = os.path.join(base_dir, 'models/model')
@@ -110,8 +111,7 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
-        name = user_input('What would you like to name the comet experiment?:')
-        experiment.set_name(name)
+        experiment.set_name(comet)
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.set_git_metadata()
         experiment.set_os_packages()
@@ -122,10 +122,9 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     num_train_steps = metadata['hyperparameters']['train_steps']
     num_train_steps = int(num_train_steps)
 
-
-    config = tf.estimator.RunConfig(model_dir=model_dir)
+    tf_config = tf.estimator.RunConfig(model_dir=model_dir)
     train_and_eval_dict = model_lib.create_estimator_and_inputs(
-        run_config=config,
+        run_config=tf_config,
         sample_1_of_n_eval_examples=1,
         hparams=model_hparams.create_hparams(None),
         pipeline_config_path=pipeline_config_path,
@@ -161,10 +160,10 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
     # get extra config files
     extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
     model_path = str(frozen_graph_path)
-    local_mode = train.artifact_path is not None
     if comet:
         experiment.log_asset(model_path)
 
+    # TODO: make evaluation optional
     try:
         click.echo("Evaluating model...")
         with ExitStack() as stack:
@@ -205,9 +204,13 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         metadata['validation_error'] = traceback.format_exc()
 
     if comet:
-        experiment.log_asset_data(metadata, file_name="metadata.json")
+        experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
-    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, local_mode)
+    # export metadata locally
+    with open(base_dir / 'metadata.json', 'w') as f:
+        json.dump(train.metadata, f, indent=2)
+        
+    result = TrainOutput(Path(model_path), extra_files)
     return result
     
 
@@ -272,7 +275,6 @@ def _get_paths_for_extra_files(artifact_path: Path):
 
     extras.append(labels_path)
     return extras, frozen_graph_path
-
 
 def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
     """Exports frozen inference graph from model checkpoints
