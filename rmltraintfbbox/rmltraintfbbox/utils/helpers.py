@@ -105,7 +105,7 @@ def prepare_for_training(
     # create custom configuration if necessary
     user_config = default_config
     if not config.get('use_default_config'):
-        if config.get('hyperparemeters'):
+        if config.get('hyperparameters'):
             user_config = _process_user_hyperparameters(user_config, config['hyperparameters'])
         else:
             user_config = _configuration_prompt(user_config)
