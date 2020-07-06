@@ -177,7 +177,8 @@ class KeypointsModel:
                 centroid, bbox_size, cropsize)
 
             keypoints = self.preprocess_keypoints(parsed['image/object/keypoints'].values, 
-                centroid, bbox_size, cropsize, old_dims, self.nb_keypoints, keypoints_mode=self.keypoints_mode)
+                centroid, bbox_size, cropsize, old_dims, self.nb_keypoints, 
+                sigma=self.hp.get('model_unet_params', {}).get('sigma'), keypoints_mode=self.keypoints_mode)
 
             # other augmentations
             if train and self.keypoints_mode == 'coords':
@@ -569,7 +570,7 @@ class KeypointsModel:
         return tf.transpose(keypoints, [0, 2, 3, 1])
 
     @staticmethod
-    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints, keypoints_mode='coords'):
+    def preprocess_keypoints(parsed_kps, centroid, bbox_size, cropsize, img_size, nb_keypoints, sigma=None, keypoints_mode='coords'):
         def _get_image_coords():
             keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
             x_coords = keypoints[:, 0]
@@ -578,28 +579,24 @@ class KeypointsModel:
             y_coords *= img_size[1]
             return x_coords, y_coords
         if keypoints_mode == 'coords':
-            keypoints = tf.reshape(parsed_kps, [-1, 2])[:nb_keypoints]
-            keypoints = (keypoints - centroid) / (bbox_size / 2)
-            return tf.reshape(keypoints, [nb_keypoints * 2])
+            keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
+            keypoints *= img_size[0]
+            keypoints = (keypoints - centroid) / (bbox_size // 2)
+            return tf.reshape(keypoints, (nb_keypoints * 2,))
         elif keypoints_mode == 'mask':
             resize_coef = cropsize / bbox_size
             xc, yc = _get_image_coords()
             xc = ((xc - centroid[0]) * resize_coef) + (cropsize // 2)
             yc = ((yc - centroid[1]) * resize_coef) + (cropsize // 2)
-            crop_coords = tf.reshape(tf.stack([xc, yc], axis=1), (nb_keypoints, 2))
-            crop_coords = tf.clip_by_value(crop_coords, 0, cropsize)
-            crop_coords = tf.concat([
-                tf.cast(crop_coords, tf.int64), 
-                tf.reshape(tf.range(0, nb_keypoints, 1, dtype=tf.int64), (nb_keypoints, 1))
-            ], axis=1)
-            mask = tf.sparse.reorder(tf.sparse.SparseTensor(
-                crop_coords, 
-                tf.ones((nb_keypoints,), dtype=tf.float32), 
-                dense_shape=(cropsize, cropsize, nb_keypoints)
-            ))
-            mask = tf.sparse.to_dense(mask, default_value=0.)
-            # TODO gaussian fancyness
-            return tf.reshape(mask, (-1,))
+            keypoints_crop = tf.cast(tf.reshape(tf.stack([xc, yc], axis=-1), (nb_keypoints, 2)), tf.int32)
+            coord_range = tf.range(cropsize)
+            mesh = tf.stack(tf.meshgrid(coord_range, coord_range, indexing='ij'), axis=-1)
+            if not sigma:
+                mask = tf.reduce_all(keypoints_crop[None, None, :, :] == mesh[:, :, None, :], axis=-1)
+            else:
+                df = mesh[:, :, None, :] - keypoints_crop[None, None, :, :]
+                mask = tf.exp(-tf.reduce_sum(df**2, axis=-1) / (2 * sigma**2))
+            return tf.reshape(tf.cast(mask, tf.float32), (-1,))
         else:
             raise NotImplementedError(keypoints_mode)
 
