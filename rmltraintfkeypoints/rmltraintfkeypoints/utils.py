@@ -4,7 +4,7 @@ import cv2
 import time
 
 
-def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None):
+def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None, ransac=True):
     """
     Calculates pose vectors using CV2's solvePNP.
     :param ref_points: 3D reference points, shape (n, 3)
@@ -37,13 +37,9 @@ def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_cr
 
     assert len(keypoints) % len(ref_points) == 0
     if len(keypoints) > len(ref_points):
-        ransac = True
         ref_points = np.tile(ref_points, [len(keypoints) // len(ref_points), 1])
-    else:
-        ransac = False
 
-    keypoints = keypoints.copy()
-    keypoints[:, [0, 1]] = keypoints[:, [1, 0]]
+    keypoints = keypoints[:, [1, 0]]
     if not ransac:
         ret, r_vec, t_vec = cv2.solvePnP(
             ref_points, keypoints,
@@ -52,7 +48,8 @@ def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_cr
         # t = time.time()
         ret, r_vec, t_vec, inliers = cv2.solvePnPRansac(
             ref_points, keypoints,
-            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP
+            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP,
+            reprojectionError=32
         )
         # print(f'Time: {time.time() - t:.2f}, inliers: {len(inliers) if inliers is not None else 0}')
     if not ret:
@@ -76,7 +73,7 @@ def to_rotation(r):
 def geodesic_error(rot_pred, rot_truth):
     rot_pred, rot_truth = to_rotation(rot_pred), to_rotation(rot_truth)
     # fix weird 180-degree flip
-    rot_pred = Rotation.from_euler('xyz', [np.pi, 0, 0]) * rot_pred
+    # rot_pred = Rotation.from_euler('xyz', [np.pi, 0, 0]) * rot_pred
     return _quat_geodesic_error(rot_pred.as_quat(), rot_truth.as_quat())
 
 

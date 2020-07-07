@@ -164,7 +164,7 @@ def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=Fals
                 for kp, kp_true in zip(kps, kps_true)
             ])
             if render_poses:
-                for kp_idx in range(len(kps)):
+                for kp_idx in range(len(kps_true)):
                     y = int(kps[kp_idx, 0])
                     x = int(kps[kp_idx, 1])
                     ay = int(kps_true[kp_idx, 0])
@@ -183,7 +183,7 @@ def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=Fals
                 cv2.line(image, (p3[0], p3[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p1[0], p1[1]), (p4[0], p4[1]), (255, 0, 255), 6)
                 cv2.line(image, (p2[0], p2[1]), (p4[0], p4[1]), (255, 0, 255), 6)
-                cv2.imwrite(f'{artifact_path}/pose-render-{img_cnt:04d}.png',
+                cv2.imwrite(f'{output_path}/pose-render-{img_cnt:04d}.png',
                             cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             img_cnt += 1
 
