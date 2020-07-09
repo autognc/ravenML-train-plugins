@@ -21,6 +21,7 @@ import glob
 import shutil
 from contextlib import ExitStack
 import traceback
+import functools
 from pathlib import Path
 from datetime import datetime
 from ravenml.options import verbose_opt
@@ -36,7 +37,6 @@ from google.protobuf import text_format
 import ray
 from ray.tune import Trainable, grid_search, run_experiments
 from ray.tune.schedulers import PopulationBasedTraining
-from tensorflow.python.data.experimental import CheckpointInputPipelineHook
 import datetime
 import time
 
@@ -153,67 +153,6 @@ def train(ctx, train: TrainInput, verbose: bool, comet: bool):
         })
 
     run_experiments({"pbt_estimator": train_spec}, scheduler=pbt)
-"""
-
-    ### start of train? can we split this up?
-    # actually train
-    with ExitStack() as stack:
-        if comet:
-            stack.enter_context(experiment.train())
-        click.echo('Training model...')
-        tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
-        click.echo('Training complete')
-
-    # final metadata and return of TrainOutput object
-    metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
-
-    # get extra config files
-    extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
-    model_path = str(frozen_graph_path)
-    local_mode = train.artifact_path is not None
-
-    try:
-        click.echo("Evaluating model...")
-        with ExitStack() as stack:
-
-            # path to label_map.pbtxt
-            label_path = str(extra_files[-1])
-            test_path = str(train.dataset.path / 'test')
-            output_path = str(base_dir / 'validation')
-
-            image_dataset = utils.get_image_dataset(test_path)
-            truth_data = list(utils.gen_truth_data(test_path))
-
-            model = BoundingBoxModel(model_path, label_path)
-            evaluator = BoundingBoxEvaluator(model.category_index)
-            image_tensor = image_dataset.make_one_shot_iterator().get_next()
-            with tf.Session() as sess:
-                with model.start_session():
-                    for i, (bbox, centroid) in enumerate(truth_data):
-                        image = sess.run(image_tensor)
-                        output, inference_time = model.run_inference_on_single_image(image)
-                        evaluator.add_single_result(output, inference_time, bbox, centroid)
-
-            evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
-            if comet:
-                experiment.log_asset('validation_results.pickle')
-            evaluator.calculate_default_and_save(output_path)
-
-            extra_files.append(os.path.join(output_path, 'stats.json'))
-            extra_files.append(os.path.join(output_path, 'validation_results.pickle'))
-            extra_files += glob.glob(os.path.join(output_path, '*_curve_*.png'))
-            if comet:
-                experiment.log_asset(os.path.join(output_path, 'stats.json'))
-                for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
-                    experiment.log_image(img)
-    except Exception:
-        metadata['validation_error'] = traceback.format_exc()
-
-    if comet:
-        experiment.log_asset_data(metadata, file_name="metadata.json")
-
-    result = TrainOutput(metadata, base_dir, Path(model_path), extra_files, local_mode)
-    return result"""
 
 class MyTrainableEstimator(Trainable):
     """
@@ -238,6 +177,7 @@ class MyTrainableEstimator(Trainable):
         cli_spinner("Importing TensorFlow...", _import_od)
         from pathlib import Path
         self.config = config
+        self.iters = 0
         self._setup_dirs()
         ####does this need to be different for each
         self.training_steps_per_trial = 10
@@ -267,7 +207,7 @@ class MyTrainableEstimator(Trainable):
             pipeline_config_path=self.pipeline_config_path,
             train_steps=self.max_steps)
 
-        self.iters = 0
+
         self.estimator = train_and_eval_dict['estimator']
         self.train_input_fn = train_and_eval_dict['train_input_fn']
         self.eval_input_fns = train_and_eval_dict['eval_input_fns']
@@ -305,11 +245,10 @@ class MyTrainableEstimator(Trainable):
             f.write(str(self.model_folder) + '\n')
             f.write("training iteration: " + str(self.iters) + "\n")
             f.write('Training model...\n')
-        #metrics, export_results = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
-        self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps_per_trial)
-        metrics = self.estimator.evaluate(input_fn=self.eval_input_fns[0])
+        metrics, export_results = tf.estimator.train_and_evaluate(self.estimator, self.train_spec, self.eval_specs[0])
+        #self.estimator.train(input_fn=self.train_input_fn, steps=self.training_steps_per_trial)
+        #metrics = self.estimator.evaluate(input_fn=self.eval_input_fns[0])
         accuracy = metrics['DetectionBoxes_Precision/mAP']
-        self._evaluate()
         self.steps = self.steps + self.training_steps_per_trial
         with open(self.log_path, "a") as f:
             f.write(str(type(metrics)) + '\n')
@@ -363,6 +302,7 @@ class MyTrainableEstimator(Trainable):
         with open(self.log_path, "a") as f:
             f.write("restored checkpoint\n")
             # checkpoint)
+    
     def _setup_dirs(self):
         
         self.base_dir  = self.config['base_dir']
@@ -373,23 +313,39 @@ class MyTrainableEstimator(Trainable):
         self.model_folder = self.base_dir / 'models' / unique_time
         eval_folder = self.model_folder / 'eval'
         train_folder = self.model_folder / 'train'
+        data_folder = self.base_dir / 'data'
         os.makedirs(self.model_folder)
         os.makedirs(eval_folder)
         os.makedirs(train_folder)
         self.pipeline_config_path = os.path.join(self.model_folder, 'pipeline.config')
         
+        def rgetattr(obj, attr, *args):
+            def _getattr(obj, attr):
+                return getattr(obj, attr, *args)
+            return functools.reduce(_getattr, [obj] + attr.split('.'))
+
+        def rsetattr(obj, attr, val):
+            pre, _, post = attr.rpartition('.')
+            return setattr(rgetattr(obj, pre) if pre else obj, post, val)
+        
         ### need a better way to do this. reading pipeline file this way:
         ### https://stackoverflow.com/questions/55323907/dynamically-editing-pipeline-config-for-tensorflow-object-detection
         ### splits anchorboxes for some reason
         shutil.copy2(self.base_pipeline_config_path, self.model_folder)
-        with open(self.pipeline_config_path) as template:
-            pipeline_contents = template.read()
-
-        pipeline_contents = pipeline_contents.replace( 'model/train/model.ckpt', str(unique_time + '/train/model.ckpt'))
-        pipeline_contents = pipeline_contents.replace( 'initial_learning_rate: 0.0004', str('initial_learning_rate: '  + str(self.config['lr'])))
-
-        with open(self.pipeline_config_path, 'w') as file:
-            file.write(pipeline_contents)
+        
+        
+        model_config = pipeline_pb2.TrainEvalPipelineConfig()
+        with tf.io.gfile.GFile(self.pipeline_config_path, "r") as mod:                                                                                                                                                                                                                     
+            proto_str = mod.read()                                                                                                                                                                                                                        
+            text_format.Merge(proto_str, model_config)
+        
+        rsetattr(model_config, 'train_config.fine_tune_checkpoint', str(os.path.join(train_folder, 'model.ckpt')))
+        rsetattr(model_config, 'train_config.optimizer.rms_prop_optimizer.learning_rate.exponential_decay_learning_rate.initial_learning_rate', self.config['lr'])
+        model_config.train_input_reader.tf_record_input_reader.input_path[:] = [str(os.path.join(data_folder,'train.record-00000-of-00007'))]   
+        
+        config_text = text_format.MessageToString(model_config)                                                                                                                                                                                                        
+        with tf.gfile.Open(self.pipeline_config_path, "w") as f:                                                                                                                                                                                                                       
+            f.write(config_text)   
         
         # copy model checkpoints to our train folder
         checkpoint_folder = self.config['arch_path']
