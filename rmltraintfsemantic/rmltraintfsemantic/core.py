@@ -10,14 +10,9 @@ import re
 import os
 import shutil
 
-from ravenml.utils.local_cache import LocalCache, global_cache
-
-
-def parse_config(path):
+def parse_config(config):
     result = {}
-    with open(path, 'r') as f:
-        args = yaml.safe_load(f)
-    for arg in args:
+    for arg in config:
         arg = list(arg.items())
         if len(arg) > 1:
             raise ValueError("Invalid config file, please only specify one key-value pair per list item")
@@ -56,36 +51,30 @@ def setup_dataset(dataset_path):
 
     return num_classes
 
-
-
 @click.group(help='TensorFlow Semantic Segmentation.')
 def tf_semantic():
     pass
 
-
 @tf_semantic.command(help="Train a model.", context_settings=dict(ignore_unknown_options=True))
 @pass_train
-@click.option("--config", "-c", required=False, type=click.Path(exists=True),
-              help="Config file containing command-line parameters to deeplab/train.py.")
 @click.argument('extra_deeplab_args', nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def train(ctx, train: TrainInput, config, extra_deeplab_args):
+def train(ctx, train: TrainInput, extra_deeplab_args):
     # If the context has a TrainInput already, it is passed as "train"
     # If it does not, the constructor is called AUTOMATICALLY
     # by Click because the @pass_train decorator is set to ensure
-    # object creation, after which the created object is passed as "train".
-    # After training, create an instance of TrainOutput and return it
+    # object creation, after which execution will fail as this means 
+    # the user did not pass a config. see ravenml core file train/commands.py for more detail
     from deeplab import train as deeplab_train
 
     # set base directory for model artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab').path if train.artifact_path is None \
-        else train.artifact_path
+    artifact_dir = train.artifact_path
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
 
     # parse config file
-    config_opts = parse_config(config)
+    config_opts = parse_config(train.plugin_config)
     # parse extra deeplab args
     extra_opts = parse_deeplab_args(extra_deeplab_args)
 
@@ -96,13 +85,9 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     num_classes = setup_dataset(train.dataset.path)
 
     # fill metadata
-    metadata = {
-        'architecture': 'deeplab',
-        'date_started_at': datetime.utcnow().isoformat() + "Z",
-        'dataset_used': train.dataset.metadata,
-        'num_classes': num_classes,
-        'deeplab_options': config_opts,
-    }
+    train.plugin_metadata['architecture'] = 'deeplab'
+    train.plugin_metadata['num_classes'] = num_classes
+    train.plugin_metadata['deplab_options'] = config_opts
 
     # fill sys.argv to be passed to deeplab
     sys.argv = [sys.argv[0]]
@@ -124,17 +109,16 @@ def train(ctx, train: TrainInput, config, extra_deeplab_args):
     # return TrainOutput
     model_path = artifact_dir / "checkpoint"
     checkpoint_files = list(map(Path, (glob.glob(str(artifact_dir.absolute() / "*")))))
-    return TrainOutput(metadata, artifact_dir, model_path, checkpoint_files, train.artifact_path is not None)
+    return TrainOutput(Path(model_path), checkpoint_files)
 
+# NOTE: eval and vis are NOT tested with the current setup. test if we start using deeplab again
 
 @tf_semantic.command(help="Evaluate a model. Always use in local mode.", context_settings=dict(ignore_unknown_options=True))
 @pass_train
 @click.argument("checkpoint_dir", type=click.Path(exists=True))
-@click.option("--config", "-c", required=False, type=click.Path(exists=True),
-              help="Config file containing command-line parameters to deeplab/eval.py.")
 @click.argument('extra_deeplab_args', nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def eval(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
+def eval(ctx, train: TrainInput, checkpoint_dir, extra_deeplab_args):
     from deeplab import eval as deeplab_eval
     from deeplab import common as deeplab_common
 
@@ -142,14 +126,13 @@ def eval(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
     deeplab_common.TEST_SET = None
 
     # set base directory for eval artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab' / 'eval').path if train.artifact_path is None \
-        else train.artifact_path
+    artifact_dir = train.artifact_path
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
 
     # parse config file
-    config_opts = parse_config(config)
+    config_opts = parse_config(train.plugin_config)
     # parse extra deeplab args
     extra_opts = parse_deeplab_args(extra_deeplab_args)
 
@@ -179,11 +162,9 @@ def eval(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
 @tf_semantic.command(help="Visualize a model. Always use in local mode.", context_settings=dict(ignore_unknown_options=True))
 @pass_train
 @click.argument("checkpoint_dir", type=click.Path(exists=True))
-@click.option("--config", "-c", required=False, type=click.Path(exists=True),
-              help="Config file containing command-line parameters to deeplab/vis.py.")
 @click.argument('extra_deeplab_args', nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def vis(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
+def vis(ctx, train: TrainInput, checkpoint_dir, extra_deeplab_args):
     from deeplab import vis as deeplab_vis
     from deeplab import common as deeplab_common
 
@@ -191,14 +172,13 @@ def vis(ctx, train: TrainInput, checkpoint_dir, config, extra_deeplab_args):
     deeplab_common.TEST_SET = None
 
     # set base directory for eval artifacts
-    artifact_dir = LocalCache(global_cache.path / 'tf-semantic-deeplab' / 'vis').path if train.artifact_path is None \
-        else train.artifact_path
+    artifact_dir = train.artifact_path
 
     # set dataset directory
     data_dir = train.dataset.path / "splits" / "complete" / "train"
 
     # parse config file
-    config_opts = parse_config(config)
+    config_opts = parse_config(train.plugin_config)
     # parse extra deeplab args
     extra_opts = parse_deeplab_args(extra_deeplab_args)
 
