@@ -122,7 +122,7 @@ def train(ctx: click.Context, train: TrainInput):
         "objective": "maximize",
         },
     "name": "Test-1",
-    "trials": 2
+    "trials": 3
     }
 
 
@@ -215,7 +215,7 @@ def train(ctx: click.Context, train: TrainInput):
                         evaluator.add_single_result(output, inference_time, bbox, centroid)
 
             evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
-            experiment.log_asset(str(output_path) + 'validation_results.pickle')
+            experiment.log_asset(os.path.join(output_path, 'validation_results.pickle'))
             evaluator.calculate_default_and_save(output_path)
 
             extra_files.append(os.path.join(output_path, 'stats.json'))
@@ -230,7 +230,8 @@ def train(ctx: click.Context, train: TrainInput):
         #    print("\n \n VALIDATION ERROR FOR SOME REASON")
         #    metadata['validation_error'] = traceback.format_exc()
         #    mAP = None
-
+        #tf.reset_default_graph()
+        tf.get_variable_scope().reuse_variables()
         return mAP
     
     count = 0
