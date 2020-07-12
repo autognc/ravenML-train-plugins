@@ -111,21 +111,26 @@ def train(ctx: click.Context, train: TrainInput):
     "algorithm": "bayes",
     # Declare your hyperparameters in the Vizier-inspired format:
     "parameters": {
-        "anchor_size": {"type": "integer", "min": 60, "max": 75},
-        "anchor_scales": {"type": "integer", "min": 60, "max": 75},
-        "anchor_aspect_ratios": {"type": "float", "min": 0.5, "max": 0.9}
+        "inital_learning_rate": {"type": "float", "min": 0.0001, "max": 0.001},
+        "anchor_size": {"type": "discrete", "values": [36, 72]},
+        "anchor_stride": {"type": "discrete", "values": [8, 16]}
         },
     # Declare what we will be optimizing, and how:
     "spec": {
-    "metric": "mAP",
+        "metric": "mAP",
         "objective": "maximize",
+        "maxCombo": 4
         },
     "name": "Test-1",
+<<<<<<< Updated upstream
     "trials": 3
+=======
+    "trials": 1
+>>>>>>> Stashed changes
     }
 
 
-    opt = Optimizer(optconfig, project_name='bbox-hyperparameter')
+    opt = Optimizer(optconfig, project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment', api_key='lDPleO5xvtrjNQSvAmsByTRg5')
     def _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents):
 
         config_update = {}
@@ -229,8 +234,14 @@ def train(ctx: click.Context, train: TrainInput):
         #    print("\n \n VALIDATION ERROR FOR SOME REASON")
         #    metadata['validation_error'] = traceback.format_exc()
         #    mAP = None
+<<<<<<< Updated upstream
         #tf.reset_default_graph()
         tf.get_variable_scope().reuse_variables()
+=======
+
+        tf.get_variable_scope().reuse_variables()
+
+>>>>>>> Stashed changes
         return mAP
     
     count = 0
@@ -242,7 +253,7 @@ def train(ctx: click.Context, train: TrainInput):
         count += 1
         experiment.log_metric("mAP", mAP)
 
-    experiment.log_asset_data(train.metadata, file_name="metadata.json")
+    #experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
     # export metadata locally
     with open(base_dir / 'metadata.json', 'w') as f:
@@ -277,7 +288,6 @@ def _get_paths_for_extra_files(artifact_path: Path, model_dir: Path):
     labels_path = artifact_path / 'data' / 'label_map.pbtxt'
 
     checkpoints = [f for f in files if checkpoint_regex.match(f)]
-    print("\n \n THE CHECKPOINTS<", checkpoints)
 
     # calculate the max checkpoint
     max_checkpoint = 0
@@ -326,9 +336,6 @@ def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output
         output_directory (str): directory where the frozen_inference_graph will
             be outputted to
     """
-    print("\n \n PIPELINE CONFIG PAHT", pipeline_config_path)
-    print("\n \n chkpt PATH", checkpoint_path)
-    print("\n \n OUTPUT DIR", output_directory)
     pipeline_config = pipeline_pb2.TrainEvalPipelineConfig()
     with tf.gfile.GFile(pipeline_config_path, 'r') as f:
         text_format.Merge(f.read(), pipeline_config)

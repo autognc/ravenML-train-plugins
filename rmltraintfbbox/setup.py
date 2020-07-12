@@ -23,7 +23,7 @@ setup(
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
-        'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection#egg=object-detection',
+        'object-detection @ https://github.com/dlfonseka/object-detection/tarball/object-detection#egg=object-detection',
         'absl-py==0.8.0',
         'pycocotools-fix==2.0.0.1',
         'matplotlib==3.1.1',
