@@ -63,7 +63,6 @@ def train(ctx: click.Context, train: TrainInput):
     metadata = train.plugin_metadata
     comet = config.get('comet')
 
-
     # set up TF verbosity
     if config['verbose']:
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
@@ -239,7 +238,6 @@ def train(ctx: click.Context, train: TrainInput):
         #experiment.add_tag("smaller_model_three_hyperparameters_opt")
         # Call the function that wraps the Neural Network code to start the experiment
         mAP = _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents)
-        print(f"THIS IS THE MAP: {mAP}")
         print("experiment: ", count, " map: ", mAP)
         count += 1
         experiment.log_metric("mAP", mAP)
