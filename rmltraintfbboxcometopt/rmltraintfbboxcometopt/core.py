@@ -122,11 +122,7 @@ def train(ctx: click.Context, train: TrainInput):
         "maxCombo": 4
         },
     "name": "Test-1",
-<<<<<<< Updated upstream
-    "trials": 3
-=======
     "trials": 1
->>>>>>> Stashed changes
     }
 
 
@@ -234,21 +230,16 @@ def train(ctx: click.Context, train: TrainInput):
         #    print("\n \n VALIDATION ERROR FOR SOME REASON")
         #    metadata['validation_error'] = traceback.format_exc()
         #    mAP = None
-<<<<<<< Updated upstream
-        #tf.reset_default_graph()
-        tf.get_variable_scope().reuse_variables()
-=======
 
         tf.get_variable_scope().reuse_variables()
 
->>>>>>> Stashed changes
-        return mAP
+        return mAP, model_path
     
     count = 0
     for experiment in opt.get_experiments():
         #experiment.add_tag("smaller_model_three_hyperparameters_opt")
         # Call the function that wraps the Neural Network code to start the experiment
-        mAP = _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents)
+        mAP, model_path = _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents)
         print("experiment: ", count, " map: ", mAP)
         count += 1
         experiment.log_metric("mAP", mAP)
