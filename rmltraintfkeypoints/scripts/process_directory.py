@@ -75,14 +75,17 @@ def main():
             'detected_position': np.squeeze(t_vec).tolist(),
             'inference_time': inference_time,
             'pnp_time': pnp_time,
-            'pose_error': utils.geodesic_error(r_vec, metadata['pose'].numpy()).tolist()
+            'pose_error': utils.geodesic_error(r_vec, metadata['pose'].numpy()).tolist(),
+            'position_error': np.linalg.norm(metadata['position'].numpy() - np.squeeze(t_vec))
         })
         results.append(result)
 
     avg_inference_time = sum(result['inference_time'] for result in results) / len(results)
     avg_pnp_time = sum(result['pnp_time'] for result in results) / len(results)
-    avg_error = sum(result['pose_error'] for result in results) / len(results)
-    print(f"Average inference time: {int(avg_inference_time* 1000)}ms, average PnP time: {int(avg_pnp_time * 1000)}ms, average error: {avg_error}")
+    avg_pose_error = sum(result['pose_error'] for result in results) / len(results)
+    avg_pos_error = sum(result['position_error'] for result in results) / len(results)
+    print(f"Average inference time: {int(avg_inference_time* 1000)}ms, average PnP time: {int(avg_pnp_time * 1000)}ms"
+          f" average pose error: {avg_pose_error}, average position error: {avg_pos_error}")
     with open(args.output, 'w') as f:
         json.dump(results, f, indent=2)
 
