@@ -17,7 +17,6 @@ from colorama import init, Fore
 from pathlib import Path
 from ravenml.utils.local_cache import RMLCache
 from ravenml.utils.question import user_confirms, user_input, user_selects
-from ravenml.utils.plugins import raise_parameter_error
 
 init()
 
@@ -144,7 +143,7 @@ def prepare_for_training(
         default_config = defaults[optimizer_name]
     except KeyError as e:
         hint = 'optimizer name, optimizer not supported for this model architecture.'
-        raise_parameter_error(optimizer_name, hint)
+        raise click.exception.BadParameter(optimizer_name, param=optimizer_name, param_hint=hint)
     
     # create custom configuration if necessary
     user_config = default_config

@@ -26,7 +26,6 @@ from datetime import datetime
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
-from ravenml.utils.plugins import raise_parameter_error
 from rmltraintfbboxcometopt.utils.helpers import prepare_for_training, download_model_arch, prepare_one_train
 from rmltraintfbboxcometopt.validation.model import BoundingBoxModel
 from rmltraintfbboxcometopt.validation.stats import BoundingBoxEvaluator
@@ -89,8 +88,7 @@ def train(ctx: click.Context, train: TrainInput):
         model = models[model_name]
     except KeyError as e:
         hint = 'model name, model is not supported by this plugin.'
-        raise_parameter_error(model_name, hint)
-    
+        raise click.exception.BadParameter(model_name, param=model_name, param_hint=hint)
     # extract information and add to metadata
     model_type = model['type']
     model_url = model['url']
