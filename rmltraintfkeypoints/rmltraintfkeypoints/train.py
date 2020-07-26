@@ -340,7 +340,7 @@ class KeypointsModel:
                     validation_steps=num_val // self.hp['batch_size'],
                     callbacks=callbacks
                 )
-            except Exception:
+            except Exception as e:
                 print(traceback.format_exc())
                 return model_path
             finally:
