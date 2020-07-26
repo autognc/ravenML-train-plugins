@@ -118,18 +118,23 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     errs_position = [0]
     errs_by_keypoint = []
     model = tf.keras.models.load_model(model_path, compile=False)
+    cropsize = model.input.shape[1]
     if model.name == 'mobilepose':
         nb_keypoints = model.output.shape[-1] // 2
+        loss = KeypointsModel.get_mse_loss()
+    elif model.name == 'hourglass':
+        nb_keypoints = model.output.shape[1] // (64 * 64 * 2)
+        loss = KeypointsModel.get_heatmap_loss(nb_keypoints)
     else:
         nb_keypoints = model.output.shape[1] // 2
-    cropsize = model.input.shape[1]
+        loss = KeypointsModel.get_mse_loss()
     ref_points = np.load(train.dataset.path / "keypoints.npy").reshape((-1, 3))[:nb_keypoints]
 
     pose_error_callback = PoseErrorCallback(ref_points, cropsize, pnp_focal_length)
 
     model.compile(
         optimizer=tf.keras.optimizers.SGD(),
-        loss=KeypointsModel.get_mse_loss(), # TODO change for model type
+        loss=loss,
         metrics=[pose_error_callback.assign_metric]
     )
 
@@ -138,12 +143,15 @@ def eval(ctx, train, model_path, pnp_focal_length, plot=False, render_poses=Fals
     img_cnt = 0
     for image_batch, truth_batch in tqdm.tqdm(test_data):
         kps_batch = model.predict(image_batch)
+        batch_size = kps_batch.shape[0]
         if model.name == 'mobilepose':
             kps_batch = KeypointsModel.decode_displacement_field(kps_batch)
-            kps_batch = tf.transpose(kps_batch, [0, 3, 1, 2])
-            kps_batch = tf.reshape(kps_batch, [tf.shape(kps_batch)[0], -1, 2]).numpy()
+            kps_batch = tf.transpose(kps_batch, (0, 3, 1, 2))
+            kps_batch = tf.reshape(kps_batch, (batch_size, -1, 2)).numpy()
+        elif model.name == 'hourglass':
+            kps_batch = KeypointsModel.decode_keypoint_heatmap(kps_batch, nb_keypoints, cropsize)
         else:
-            kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
+            kps_batch = kps_batch.reshape(batch_size, -1, 2)
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         kps_true_batch = (truth_batch['keypoints'] - truth_batch['centroid'][:, None, :])\
             / truth_batch['bbox_size'][:, None, None] * cropsize + (cropsize // 2)

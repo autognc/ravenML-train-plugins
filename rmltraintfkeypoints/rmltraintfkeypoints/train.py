@@ -3,9 +3,10 @@ import numpy as np
 import traceback
 from keras_applications import mobilenet_v2, imagenet_utils
 import os
+import cv2
 import time
 from . import utils
-import cv2
+from . import hourglass_utils
 
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
@@ -114,7 +115,7 @@ class KeypointsModel:
         self.keypoints_3d = keypoints_3d[:self.nb_keypoints]
         self.crop_size = hp['crop_size']
         self.crop_size_rounded = utils.pow2_round(self.crop_size)
-        self.keypoints_mode = 'mask' if (self.hp['model_arch'] == 'unet') else 'coords'
+        self.keypoints_mode = 'heatmap' if (self.hp['model_arch'] == 'hourglass') else 'coords'
 
     def _get_dataset(self, split_name, train):
         """
@@ -147,7 +148,7 @@ class KeypointsModel:
                 tf.io.FixedLenFeature([4], tf.float32)
         }
 
-        if self.hp['model_arch'] in ['unet']:
+        if self.hp['model_arch'] in ['hourglass']:
             cropsize = self.crop_size_rounded
         else:
             cropsize = self.crop_size
@@ -178,7 +179,7 @@ class KeypointsModel:
 
             keypoints = self.preprocess_keypoints(parsed['image/object/keypoints'].values, 
                 centroid, bbox_size, cropsize, old_dims, self.nb_keypoints, 
-                sigma=self.hp.get('model_unet_params', {}).get('sigma'), keypoints_mode=self.keypoints_mode)
+                sigma=self.hp.get('model_heatmap_params', {}).get('sigma'), keypoints_mode=self.keypoints_mode)
 
             # other augmentations
             if train and self.keypoints_mode == 'coords':
@@ -245,6 +246,15 @@ class KeypointsModel:
         val_dataset = val_dataset.batch(self.hp['batch_size']).repeat()
 
         """imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
+        heatmap = self.decode_label(kps[1])['keypoints'].numpy()
+        heatmap = heatmap.reshape((64, 64, 20))
+        img = np.zeros((64, 64, 3))
+        for i in range(20):
+            img[:, :, i % 3] += heatmap[:, :, i] * 255
+            img[:, :, i % 3] = np.clip(img[:, :, i % 3], 0, 255)
+        cv2.imwrite('test.png', img.astype(np.uint8))"""
+
+        """imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
         for img, kp in zip(imgs, kps):
             kp = self.decode_label(kp)['keypoints'].numpy()
             kp = kp * (self.crop_size / 2) + (self.crop_size / 2)
@@ -278,8 +288,8 @@ class KeypointsModel:
                     save_best_only=False,
                 )
             ]
-            if self.keypoints_mode != 'mask':
-                # TODO support unet
+            if self.keypoints_mode != 'heatmap':
+                # TODO support heatmap
                 callbacks.append(pose_error_callback)
 
             # if this is the first phase, generate a new model with fresh weights.
@@ -288,7 +298,7 @@ class KeypointsModel:
                 model = {
                     'mobilenet': self._gen_model_mobilenet,
                     'densenet': self._gen_model_densenet,
-                    'unet': self._get_custom_unet,
+                    'hourglass': self._get_custom_hourglass,
                     'mobilepose': self._gen_model_mobilepose,
                 }[self.hp['model_arch']]()
             else:
@@ -310,9 +320,9 @@ class KeypointsModel:
             if self.hp['model_arch'] == 'mobilepose':
                 metrics.append(pose_error_callback.assign_metric_mobilepose)
                 loss = self.get_mobilepose_loss(model.output_shape[-3:-1])
-            elif self.hp['model_arch'] == 'unet':
+            elif self.hp['model_arch'] == 'hourglass':
                 # TODO support pose error metrics
-                loss = self.get_mask_loss(self.nb_keypoints, self.crop_size_rounded)
+                loss = self.get_heatmap_loss(self.nb_keypoints)
             else:
                 metrics.append(pose_error_callback.assign_metric)
                 loss = self.get_mse_loss()
@@ -444,38 +454,16 @@ class KeypointsModel:
         )(x)
         return tf.keras.models.Model(mobilenet.input, x, name='mobilepose')
 
-    def _get_custom_unet(self):
-        from keras_unet.models import custom_unet
+    def _get_custom_hourglass(self):
         assert not self.hp.get('model_init_weights')
-        unet_params = self.hp.get('model_unet_params', {})
-        unet_model_params = dict(
-            input_shape=(self.crop_size_rounded, self.crop_size_rounded, 3),
-            use_batch_norm=False,
-            num_classes=self.nb_keypoints,
-            num_layers=4,
-            activation='relu',
-            filters=16,
-            use_attention=False,
-            upsample_mode='deconv',
-            dropout=0.3,
-            output_activation='sigmoid'
+        heatmap_params = self.hp.get('model_heatmap_params', {})
+        model = hourglass_utils.create_hourglass_network(
+            self.crop_size_rounded,
+            num_classes=self.nb_keypoints, 
+            num_stacks=2, 
+            num_channels=heatmap_params.get('channels', 128)
         )
-        # Override select model params with the config values.
-        overridable_model_params = [
-            'use_batch_norm', 'num_layers', 'activation', 
-            'filters', 'use_attention', 'upsample_mode'
-        ]
-        for override_param in overridable_model_params:
-            param_val = unet_params.get(override_param)
-            if param_val is not None:
-                unet_model_params[override_param] = param_val
-        unet_model = custom_unet(**unet_model_params)
-        # Convert UNet 3d output to keypoints
-        unet_in = unet_model.input
-        unet_out = unet_model.output
-        out_size = self.crop_size_rounded * self.crop_size_rounded * self.nb_keypoints
-        x = tf.keras.layers.Reshape((out_size,))(unet_out)
-        return tf.keras.models.Model(unet_in, x)
+        return model
 
     @staticmethod
     def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
@@ -517,24 +505,25 @@ class KeypointsModel:
     def get_mse_loss():
         def mse_loss(y_true, y_pred):
             kps = KeypointsModel.decode_label(y_true)['keypoints']
-            return tf.keras.losses.mse(tf.reshape(kps, [tf.shape(kps)[0], -1]), y_pred)
+            return tf.keras.losses.mse(tf.reshape(kps, (tf.shape(kps)[0], -1)), y_pred)
         return mse_loss
 
     @staticmethod
-    def get_mask_loss(nb_keypoints, mask_size):
-        def mask_loss(y_true, y_pred):
+    def get_heatmap_loss(nb_keypoints, heatmap_size=64, stacks=2):
+        def heatmap_loss(y_true, y_pred):
             kps = KeypointsModel.decode_label(y_true)['keypoints']
-            kps_fixed_shape = tf.reshape(kps, (-1, nb_keypoints * mask_size * mask_size))
-            return tf.keras.losses.mse(kps_fixed_shape, y_pred)
-        return mask_loss
+            kps_heatmap = tf.reshape(kps, (tf.shape(kps)[0], heatmap_size * heatmap_size * nb_keypoints))
+            kps_heatmap_hourglass = tf.concat([kps_heatmap] * stacks, axis=1)
+            return tf.keras.losses.mse(kps_heatmap_hourglass, y_pred)
+        return heatmap_loss
 
     @staticmethod
     def get_mobilepose_loss(dfdims):
         def mobilepose_loss(y_true, y_pred):
             kps = KeypointsModel.decode_label(y_true)['keypoints']
             df_true = KeypointsModel.encode_displacement_field(kps, dfdims)
-            df_true_flat = tf.reshape(df_true, [tf.shape(df_true)[0], -1])
-            df_pred_flat = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
+            df_true_flat = tf.reshape(df_true, (tf.shape(df_true)[0], -1))
+            df_pred_flat = tf.reshape(y_pred, (tf.shape(y_pred)[0], -1))
             return tf.keras.losses.mean_absolute_error(df_true_flat, df_pred_flat)
         return mobilepose_loss
 
@@ -579,11 +568,12 @@ class KeypointsModel:
             y_coords *= img_size[1]
             return x_coords, y_coords
         if keypoints_mode == 'coords':
-            keypoints = tf.reshape(parsed_kps, (-1, 2))[:nb_keypoints]
-            keypoints *= img_size[0]
-            keypoints = (keypoints - centroid) / (bbox_size // 2)
-            return tf.reshape(keypoints, (nb_keypoints * 2,))
-        elif keypoints_mode == 'mask':
+            xc, yc = _get_image_coords()
+            xc = (xc - centroid[0]) / (bbox_size // 2)
+            yc = (yc - centroid[1]) / (bbox_size // 2)
+            return tf.reshape(tf.stack([xc, yc], axis=-1), (nb_keypoints * 2,))
+        elif keypoints_mode == 'heatmap':
+            cropsize = 64  # b/c hourglass code hardcoded for 64
             resize_coef = cropsize / bbox_size
             xc, yc = _get_image_coords()
             xc = ((xc - centroid[0]) * resize_coef) + (cropsize // 2)
@@ -599,6 +589,10 @@ class KeypointsModel:
             return tf.reshape(tf.cast(mask, tf.float32), (-1,))
         else:
             raise NotImplementedError(keypoints_mode)
+
+    @staticmethod
+    def decode_keypoint_heatmap(kps_batch, nb_keypoints, cropsize):
+        raise NotImplementedError()
 
     @staticmethod
     def preprocess_image(image_data, centroid, bbox_size, cropsize):
