@@ -32,6 +32,8 @@ from rmltraintfbbox.utils.helpers import prepare_for_training, download_model_ar
 from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
+from matplotlib import pyplot as plt
+import time
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -66,9 +68,11 @@ def train(ctx: click.Context, train: TrainInput):
 
     # set up TF verbosity
     if config['verbose']:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
+        #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
+        pass
     else:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
+        pass
+        #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
     
     # set base directory for model artifacts 
     base_dir = train.artifact_path
@@ -122,71 +126,174 @@ def train(ctx: click.Context, train: TrainInput):
     num_train_steps = metadata['hyperparameters']['train_steps']
     num_train_steps = int(num_train_steps)
 
-    tf_config = tf.estimator.RunConfig(model_dir=model_dir)
-    train_and_eval_dict = model_lib.create_estimator_and_inputs(
-        run_config=tf_config,
-        sample_1_of_n_eval_examples=1,
-        hparams=model_hparams.create_hparams(None),
-        pipeline_config_path=pipeline_config_path,
-        train_steps=num_train_steps)
-    
-    estimator = train_and_eval_dict['estimator']
-    train_input_fn = train_and_eval_dict['train_input_fn']
-    eval_input_fns = train_and_eval_dict['eval_input_fns']
-    eval_on_train_input_fn = train_and_eval_dict['eval_on_train_input_fn']
-    predict_input_fn = train_and_eval_dict['predict_input_fn']
-    train_steps = train_and_eval_dict['train_steps']
+    configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
+    model_config = configs['model']
+    train_config = configs['train_config']
+    train_input_config = configs['train_input_config']
+    eval_input_config = configs['eval_input_config']
+    eval_config = configs['eval_config']
 
-    train_spec, eval_specs = model_lib.create_train_and_eval_specs(
-        train_input_fn,
-        eval_input_fns,
-        eval_on_train_input_fn,
-        predict_input_fn,
-        train_steps,
-        final_exporter_name='exported_model',
-        eval_on_train_data=False)
+    detection_model = model_builder.build(model_config=model_config, is_training=True)
+    
+    #create tf.data.Dataset()
+    train_input = inputs.train_input(train_config, train_input_config, model_config, detection_model)
+
+    global_step = tf.Variable(
+        0, trainable=False, dtype=tf.compat.v2.dtypes.int64, name='global_step',
+        aggregation=tf.compat.v2.VariableAggregation.ONLY_FIRST_REPLICA)
+    optimizer, (learning_rate,) = od.builders.optimizer_builder.build(
+        train_config.optimizer, global_step=global_step)
+
+    if callable(learning_rate):
+      learning_rate_fn = learning_rate
+    else:
+      learning_rate_fn = lambda: learning_rate
+    features, labels = iter(train_input).next()
+
+    @tf.function
+    def _dummy_computation_fn(features, labels):
+        detection_model._is_training = False  # pylint: disable=protected-access
+        tf.keras.backend.set_learning_phase(False)
+
+        labels = model_lib.unstack_batch(
+            labels, unpad_groundtruth_tensors=train_config.unpad_groundtruth_tensors)
+
+        return model_lib2._compute_losses_and_predictions_dicts(
+            detection_model,
+            features,
+            labels)
+
+    _dummy_computation_fn(features,labels)
+    restore_from_objects_dict = detection_model .restore_from_objects(
+        fine_tune_checkpoint_type=train_config.fine_tune_checkpoint_type)
+    #validate_tf_v2_checkpoint_restore_map(restore_from_objects_dict)
+    ckpt = tf.train.Checkpoint(**restore_from_objects_dict)
+    ckpt.restore(train_config.fine_tune_checkpoint).expect_partial()
+
+    ckpt = tf.train.Checkpoint(step=global_step, model=detection_model, optimizer=optimizer)
+    checkpoint_max_to_keep = 2 #add this to arg of function?
+
+    manager = tf.train.CheckpointManager(ckpt, model_dir, max_to_keep=checkpoint_max_to_keep)
+    latest_checkpoint = tf.train.latest_checkpoint(model_dir)
+    ckpt.restore(latest_checkpoint)
 
     # actually train
     with ExitStack() as stack:
         if comet:
             stack.enter_context(experiment.train())
         click.echo('Training model...')
-        tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
+
+        num_steps_per_iteration = 1
+
+        clip_gradients_value = None
+        if train_config.gradient_clipping_by_norm > 0:
+            clip_gradients_value = train_config.gradient_clipping_by_norm
+        def train_step_fn(features, labels):
+            """Single train step."""
+            loss = model_lib2.eager_train_step(
+                detection_model,
+                features,
+                labels,
+                train_config.unpad_groundtruth_tensors,
+                optimizer,
+                learning_rate=learning_rate_fn(),
+                add_regularization_loss=train_config.add_regularization_loss,
+                clip_gradients_value=clip_gradients_value,
+                global_step=global_step)
+            global_step.assign_add(1)
+            return loss
+
+        def _sample_and_train(train_step_fn, data_iterator):
+            features, labels = data_iterator.next()
+            per_replica_losses = train_step_fn(features, labels)
+            # TODO(anjalisridhar): explore if it is safe to remove the
+            ## num_replicas scaling of the loss and switch this to a ReduceOp.Mean
+            return per_replica_losses
+
+        @tf.function
+        def _dist_train_step(data_iterator):
+            """A distributed train step."""
+
+            if num_steps_per_iteration > 1:
+                for _ in tf.range(num_steps_per_iteration - 1):
+                    _sample_and_train(jtrain_step_fn, data_iterator)
+            return _sample_and_train(train_step_fn, data_iterator)
+        train_input_iter = iter(train_input)
+
+        if int(global_step.value()) == 0:
+            manager.save()
+
+        checkpointed_step = int(global_step.value())
+        logged_step = global_step.value()
+
+        last_step_time = time.time()
+        checkpoint_every_n = 10
+        #TODO: implement eval and comet-opt in main train loop
+        for _ in range(global_step.value(), num_train_steps,
+                        num_steps_per_iteration):
+
+            loss = _dist_train_step(train_input_iter)
+
+            time_taken = time.time() - last_step_time
+            last_step_time = time.time()
+
+            tf.compat.v2.summary.scalar(
+                'steps_per_sec', num_steps_per_iteration * 1.0 / time_taken,
+                step=global_step)
+
+            if global_step.value() - logged_step >= 1000:
+                print(
+                    'Step {} per-step time {:.3f}s loss={:.3f}'.format(
+                        global_step.value(), time_taken / num_steps_per_iteration,
+                        loss))
+                logged_step = global_step.value()
+
+            if ((int(global_step.value()) - checkpointed_step) >= checkpoint_every_n):
+                manager.save()
+                checkpointed_step = int(global_step.value())
+
+
+        #tf.estimator.train_and_evaluate(estimator, train_spec, eval_specs[0])
         click.echo('Training complete')
 
     # final metadata and return of TrainOutput object
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
 
     # get extra config files
-    extra_files, frozen_graph_path = _get_paths_for_extra_files(base_dir)
-    model_path = str(frozen_graph_path)
+    extra_files = _get_paths_for_extra_files(base_dir)
+
+    #export detection_model as SavedModel
+    saved_model_path = model_dir + '/saved_model'
+    os.mkdir(saved_model_path)
+    tf.saved_model.save(detection_model, str(saved_model_path))
+
     if comet:
         experiment.log_asset(model_path)
 
     # TODO: make evaluation optional
-    try:
+    if config['evaluate']:
         click.echo("Evaluating model...")
         with ExitStack() as stack:
             if comet:
                 stack.enter_context(experiment.validate())
-
             # path to label_map.pbtxt
-            label_path = str(extra_files[-1])
+            label_path = str(train.dataset.path / 'label_map.pbtxt')
             test_path = str(train.dataset.path / 'test')
             output_path = str(base_dir / 'validation')
+            os.mkdir(output_path)
 
             image_dataset = utils.get_image_dataset(test_path)
             truth_data = list(utils.gen_truth_data(test_path))
 
-            model = BoundingBoxModel(model_path, label_path)
-            evaluator = BoundingBoxEvaluator(model.category_index)
-            image_tensor = image_dataset.make_one_shot_iterator().get_next()
-            with tf.Session() as sess:
-                with model.start_session():
-                    for i, (bbox, centroid) in enumerate(truth_data):
-                        image = sess.run(image_tensor)
-                        output, inference_time = model.run_inference_on_single_image(image)
-                        evaluator.add_single_result(output, inference_time, bbox, centroid)
+            evaluator = BoundingBoxEvaluator(od.utils.label_map_util.create_category_index_from_labelmap(label_path))
+
+            for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
+                true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
+                truth = {'groundtruth_boxes': bbox, 'groundtruth_classes': 1}
+                start = time.time()
+                output = detection_model.call(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.float32))
+                inference_time = time.time() - start
+                evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
 
             evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
             if comet:
@@ -200,9 +307,7 @@ def train(ctx: click.Context, train: TrainInput):
                 experiment.log_asset(os.path.join(output_path, 'stats.json'))
                 for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
                     experiment.log_image(img)
-    except Exception:
-        metadata['validation_error'] = traceback.format_exc()
-
+    
     if comet:
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
@@ -210,7 +315,7 @@ def train(ctx: click.Context, train: TrainInput):
     with open(base_dir / 'metadata.json', 'w') as f:
         json.dump(train.metadata, f, indent=2)
         
-    result = TrainOutput(Path(model_path), extra_files)
+    result = TrainOutput(Path(saved_model_path), extra_files)
     return result
     
 
@@ -231,10 +336,6 @@ def _get_paths_for_extra_files(artifact_path: Path):
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
 
-    # path to saved_model.pb
-    saved_model_path = extras_path / 'export' / 'exported_model'
-    saved_model_path = saved_model_path / os.listdir(saved_model_path)[0] / 'saved_model.pb'
-
     # path to label map
     labels_path = artifact_path / 'data' / 'label_map.pbtxt'
 
@@ -250,54 +351,23 @@ def _get_paths_for_extra_files(artifact_path: Path):
     ckpt_prefix = 'model.ckpt-' + str(max_checkpoint)
     checkpoint_path = extras_path / ckpt_prefix
     pipeline_path = extras_path / 'pipeline.config'
-    exported_dir = artifact_path / 'frozen_model'
-
-    # export frozen inference graph
-    _export_frozen_inference_graph(str(pipeline_path), str(checkpoint_path), str(exported_dir))
 
     # append files to include in extras directory
     extras = [extras_path / f for f in checkpoints]
     extras.append(pipeline_path)
-    extras.append(extras_path / 'graph.pbtxt')
-    extras.append(saved_model_path)
-
-    # path to exported frozen inference model
-    frozen_graph_path = exported_dir / 'frozen_inference_graph.pb'
+    #extras.append(extras_path / 'graph.pbtxt')
 
     # append event checkpoints for tensorboard
     for f in os.listdir(extras_path):
         if f.startswith('events.out'):
             extras.append(extras_path / f)
 
-    for f in os.listdir(extras_path / 'eval_0'):
-        if f.startswith('events.out'):
-            extras.append(extras_path / 'eval_0' / f)
+    #for f in os.listdir(extras_path / 'eval_0'):
+    #    if f.startswith('events.out'):
+    #        extras.append(extras_path / 'eval_0' / f)
 
     extras.append(labels_path)
-    return extras, frozen_graph_path
-
-def _export_frozen_inference_graph(pipeline_config_path, checkpoint_path, output_directory):
-    """Exports frozen inference graph from model checkpoints
-
-    Args: 
-        pipeline_config_path (str): path to pipeline config file
-        checkpoint_path (str): path to checkpoint prefix with highest steps
-            e.g. the checkpoint_path for /model/model.ckpt-100.index is 
-            /model/model.ckpt-100
-        output_directory (str): directory where the frozen_inference_graph will
-            be outputted to
-    """
-    
-    pipeline_config = pipeline_pb2.TrainEvalPipelineConfig()
-    with tf.gfile.GFile(pipeline_config_path, 'r') as f:
-        text_format.Merge(f.read(), pipeline_config)
-    text_format.Merge('', pipeline_config)
-    
-    input_shape = None
-    exporter.export_inference_graph(
-        'image_tensor', pipeline_config, checkpoint_path,
-        output_directory, input_shape=input_shape,
-        write_inference_graph=False)
+    return extras
 
 # stdout redirection found at https://codingdose.info/2018/03/22/supress-print-output-in-python/
 def _import_od():
@@ -320,8 +390,13 @@ def _import_od():
     # from object_detection import model_lib
     _dynamic_import('tensorflow', 'tf')
     _dynamic_import('object_detection.model_hparams', 'model_hparams')
+    _dynamic_import('object_detection.model_lib_v2', 'model_lib2')
     _dynamic_import('object_detection.model_lib', 'model_lib')
+    _dynamic_import('object_detection.builders.model_builder', 'model_builder')
+    _dynamic_import('object_detection.utils.config_util', 'config_util')
     _dynamic_import('object_detection.exporter', 'exporter')
+    _dynamic_import('object_detection.inputs', 'inputs')
+    _dynamic_import('object_detection', 'od')
     _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
     
     # now restore stdout function

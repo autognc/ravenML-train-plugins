@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 # determine GPU or CPU install via env variable
 gpu = os.getenv('RML_GPU')
-tensorflow_pkg = 'tensorflow==1.14.0' if not gpu else 'tensorflow-gpu==1.14.0'
+tensorflow_pkg = 'tensorflow==2.2.0' if not gpu else 'tensorflow-gpu==2.2.0'
 
 setup(
     name='rmltraintfbbox',
@@ -23,16 +23,18 @@ setup(
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
-        'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection#egg=object-detection',
+        'object-detection @ https://github.com/dlfonseka/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
         'absl-py==0.8.0',
         'pycocotools-fix==2.0.0.1',
         'matplotlib==3.1.1',
         'contextlib2==0.5.5',
         'pillow==6.1.0',
+        'urllib3==1.24.1',
         'lxml==4.4.0',
-        'jupyter==1.0.0',
         'comet-ml==2.0.13',
         'opencv-python==4.1.2.30',
+        'six==1.13.0',
+        'scipy==1.4.1',
         tensorflow_pkg
     ],
     data_files = [

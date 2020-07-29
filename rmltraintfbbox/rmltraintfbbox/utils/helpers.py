@@ -168,20 +168,21 @@ def prepare_for_training(
         file.write(pipeline_contents)
     
     # copy model checkpoints to our train folder
-    checkpoint_folder = arch_path
+    #TODO: wtf is going on here? why are we copying this stuff from cur_dir?
+    checkpoint_folder = arch_path / 'checkpoint'
     checkpoint0_folder = cur_dir / 'checkpoint_0'
-    file1 = checkpoint_folder / 'model.ckpt.data-00000-of-00001'
-    file2 = checkpoint_folder / 'model.ckpt.index'
-    file3 = checkpoint_folder / 'model.ckpt.meta'
-    file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
-    file5 = checkpoint0_folder / 'model.ckpt-0.index'
-    file6 = checkpoint0_folder / 'model.ckpt-0.meta'
+    file1 = checkpoint_folder / 'ckpt-0.data-00000-of-00001'
+    file2 = checkpoint_folder / 'ckpt-0.index'
+    #file3 = checkpoint_folder / 'ckpt.meta'
+    #file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
+    #file5 = checkpoint0_folder / 'model.ckpt-0.index'
+    #file6 = checkpoint0_folder / 'model.ckpt-0.meta'
     shutil.copy2(file1, train_folder)
     shutil.copy2(file2, train_folder)
-    shutil.copy2(file3, train_folder)
-    shutil.copy2(file4, train_folder)
-    shutil.copy2(file5, train_folder)
-    shutil.copy2(file6, train_folder)
+    #shutil.copy2(file3, train_folder)
+    #shutil.copy2(file4, train_folder)
+    #shutil.copy2(file5, train_folder)
+    #shutil.copy2(file6, train_folder)
     
     # load starting checkpoint template and insert training directory path
     checkpoint_file = checkpoint0_folder / 'checkpoint'
@@ -205,7 +206,7 @@ def download_model_arch(model_name: str, bbox_cache: RMLCache):
     Returns:
         Path: path to model architecture
     """
-    url = 'http://download.tensorflow.org/models/object_detection/%s.tar.gz' %(model_name)
+    url = 'http://download.tensorflow.org/models/object_detection/tf2/20200711/%s.tar.gz' %(model_name)
     # make paths within bbox cache 
     bbox_cache.ensure_subpath_exists('bbox_model_archs')
     archs_path = bbox_cache.path / 'bbox_model_archs'
