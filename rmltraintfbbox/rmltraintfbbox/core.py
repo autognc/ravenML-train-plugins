@@ -65,14 +65,6 @@ def train(ctx: click.Context, train: TrainInput):
     config = train.plugin_config
     metadata = train.plugin_metadata
     comet = config.get('comet')
-
-    # set up TF verbosity
-    if config['verbose']:
-        #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
-        pass
-    else:
-        pass
-        #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
     
     # set base directory for model artifacts 
     base_dir = train.artifact_path
