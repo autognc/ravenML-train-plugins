@@ -197,12 +197,13 @@ def train(ctx: click.Context, train: TrainInput):
 
             loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
             
-            if step % 10 == 0:
+            if step % 100 == 0:
                 print(f'Training loss at step {step}: {loss}')
-
-            if step % 20 == 0:
-                evaluate(detection_model, configs, eval_input, global_step)
                 manager.save()
+
+            if step % 500 == 0:
+                evaluate(detection_model, configs, eval_input, global_step)
+                
 
         training_time = time.time() - start
         
