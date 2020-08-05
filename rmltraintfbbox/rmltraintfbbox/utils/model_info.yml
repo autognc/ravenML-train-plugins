@@ -1,14 +1,6 @@
-centernet_restnet50_v1_fpn_coco :
-   type: centernet_restnet50_v1_fpn
-   url: centernet_resnet50_v1_fpn_512x512_coco17_tpu-8
+center_net_restnet101_v1_fpn_coco :
+   type: center_net_resnet101_v1_fpn
+   url: centernet_resnet101_v1_fpn_512x512_coco17_tpu-8
 ssd_mobilenet_v2_coco:
    type: ssd_mobilenet_v2
    url: ssd_mobilenet_v2_320x320_coco17_tpu-8
-#faster_rcnn_resnet101_v1_coco :
-#   type : faster_rcnn_resnet101_v1
-#   url  : faster_rcnn_resnet101_v1_640x640_coco17_tpu-8
-#faster_rcnn_inception_resnet_v2_coco :
-#   type : faster_rcnn_inception_resnet_v2
-#   url  : faster_rcnn_inception_resnet_v2_640x640_coco17_tpu-8
-#NOT SURE IF THE Faster-RCNN INCEPTION MODEL ACTUALLY WORKS???
-
