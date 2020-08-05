@@ -22,27 +22,17 @@ setup(
     packages=find_packages(),
     install_requires=[
         'numpy==1.16.4',
-        'cython==0.29.13',
-        'object-detection @ https://github.com/dlfonseka/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
-        'absl-py==0.8.0',
-        'pycocotools-fix==2.0.0.1',
+        'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
         'matplotlib==3.1.1',
         'contextlib2==0.5.5',
         'pillow==6.1.0',
-        'urllib3==1.24.1',
-        'lxml==4.4.0',
         'comet-ml==2.0.13',
         'opencv-python==4.1.2.30',
         'six==1.13.0',
         'scipy==1.4.1',
+        'halo==0.0.29',
+        'urllib3==1.24.3',
         tensorflow_pkg
-    ],
-    data_files = [
-        ('deeplabv3_mnv2_dm05_pascal_trainaug', [
-            'frozen_inference_graph.pb',
-            'model.ckpt.data-00000-of-00001',
-            'model.ckpt.index'
-        ])
     ],
     entry_points='''
         [ravenml.plugins.train]
