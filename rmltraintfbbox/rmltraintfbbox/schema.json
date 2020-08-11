@@ -19,13 +19,9 @@
         },
         "model_name": {
             "enum": [
-                "ssd_mobilenet_v1_coco",
-                "ssd_mobilenet_v1_fpn",
-                "ssd_resnet50_v1_fpn",
+                "center_net_restnet101_v1_fpn_coco",
                 "ssd_mobilenet_v2_coco",
-                "ssd_inception_v2_coco",
-                "faster_rcnn_resnet101_coco",
-                "faster_rcnn_inception_v2_coco"
+                "ssd_efficientdet_d0_coco"
             ]
         }
     },
@@ -38,7 +34,7 @@
             "if": {
                 "properties": {
                     "model_name": {
-                        "const": "ssd_mobilenet_v1_coco"
+                        "const": "center_net_restnet101_v1_fpn_coco"
                     }
                 }
             },
@@ -46,46 +42,7 @@
                 "properties": {
                     "optimizer": {
                         "enum": [
-                            "RMSProp",
                             "Adam"
-                        ]
-                    }
-                }
-            }
-        },
-        {
-            "if": {
-                "properties": {
-                    "model_name": {
-                        "const": "ssd_mobilenet_v1_fpn"
-                    }
-                }
-            },
-            "then": {
-                "properties": {
-                    "optimizer": {
-                        "enum": [
-                            "RMSProp"
-                        ]
-                    }
-                }
-            }
-        },
-        {
-            "if": {
-                "properties": {
-                    "model_name": {
-                        "const": "ssd_resnet50_v1_fpn"
-                    }
-                }
-            },
-            "then": {
-                "properties": {
-                    "optimizer": {
-                        "enum": [
-                            "RMSProp",
-                            "Adam",
-                            "Momentum"
                         ]
                     }
                 }
@@ -103,8 +60,7 @@
                 "properties": {
                     "optimizer": {
                         "enum": [
-                            "RMSProp",
-                            "Adam"
+                            "Momentum"
                         ]
                     }
                 }
@@ -114,7 +70,7 @@
             "if": {
                 "properties": {
                     "model_name": {
-                        "const": "ssd_inception_v2_coco"
+                        "const": "ssd_efficientdet_d0_coco"
                     }
                 }
             },
@@ -122,45 +78,7 @@
                 "properties": {
                     "optimizer": {
                         "enum": [
-                            "RMSProp",
-                            "Adam"
-                        ]
-                    }
-                }
-            }
-        },
-        {
-            "if": {
-                "properties": {
-                    "model_name": {
-                        "const": "faster_rcnn_resnet101_coco"
-                    }
-                }
-            },
-            "then": {
-                "properties": {
-                    "optimizer": {
-                        "enum": [
-                            "Momentum",
-                            "RMSProp"
-                        ]
-                    }
-                }
-            }
-        },
-        {
-            "if": {
-                "properties": {
-                    "model_name": {
-                        "const": "faster_rcnn_inception_v2_coco"
-                    }
-                }
-            },
-            "then": {
-                "properties": {
-                    "optimizer": {
-                        "enum": [
-                            "RMSProp"
+                            "Momentum"
                         ]
                     }
                 }
