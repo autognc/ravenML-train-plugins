@@ -158,5 +158,5 @@ def export_inference_graph(input_type,
   tf.saved_model.save(detection_module,
                       output_saved_model_directory,
                       signatures=concrete_function)
-
+  #tf.keras.models.save_model(detection_model, output_saved_model_directory, signatures=concrete_function)
   config_util.save_pipeline_config(pipeline_config, output_directory)
