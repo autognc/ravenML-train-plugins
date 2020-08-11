@@ -1,0 +1,6 @@
+Momentum:
+    num_classes: 1
+    train_steps: 300000
+    learning_rate_base: 0.008
+    momentum_optimizer_value: 0.9
+    batch_size: 10

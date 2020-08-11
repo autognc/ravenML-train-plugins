@@ -183,7 +183,7 @@ def train(ctx: click.Context, train: TrainInput):
 
         return metrics
 
-    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=detection_model)
     manager = tf.train.CheckpointManager(checkpoint, directory=model_dir, max_to_keep=5)
       
     with ExitStack() as stack:
@@ -240,7 +240,6 @@ def train(ctx: click.Context, train: TrainInput):
                 true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
                 truth = {'groundtruth_boxes': bbox, 'groundtruth_classes': 1}
                 start = time.time()
-                img, _ = detection_model.preprocess(tf.expand_dims(image, axis=0))
                 output = detection_model.call(tf.expand_dims(image, axis=0))
                 inference_time = time.time() - start
                 evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)

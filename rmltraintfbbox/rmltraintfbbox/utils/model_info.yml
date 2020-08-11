@@ -1,6 +1,0 @@
-center_net_restnet101_v1_fpn_coco :
-   type: center_net_resnet101_v1_fpn
-   url: centernet_resnet101_v1_fpn_512x512_coco17_tpu-8
-ssd_mobilenet_v2_coco:
-   type: ssd_mobilenet_v2
-   url: ssd_mobilenet_v2_320x320_coco17_tpu-8
