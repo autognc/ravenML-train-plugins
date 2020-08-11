@@ -10,16 +10,12 @@ metadata:
     comments: no thanks
 plugin:
     keypoints: 20
-    fc_width: 512
-    fc_count: 1
     batch_size: 5
     cache_train_data: False
     prefetch_num_batches: 10
     crop_size: 224
-    shuffle_buffer_size: 20000
-    model_arch: mobilenet
+    shuffle_buffer_size: 1
     model_init_weights: imagenet
-    model_unet_params: {}
     phases:
         - optimizer: Adam
           optimizer_args:

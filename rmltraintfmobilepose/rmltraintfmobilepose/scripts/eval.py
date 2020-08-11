@@ -1,133 +1,150 @@
 """
-Run inference on a directory of test data using a model in the Tensorflow SavedModel format.
+Evaluate on a directory of test data.
 """
 
 import tensorflow as tf
 import numpy as np
-import time
 import os
-import argparse
+import click
 import json
 import cv2
+import tqdm
 from ravenml.utils.question import user_confirms
-from scipy.spatial.transform import Rotation
 from .. import utils
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("model", type=str, help="Path to saved model")
-    parser.add_argument("directory", type=str, help="Path to data directory")
-    parser.add_argument("output", type=str, help="Path to write output (json)")
-    parser.add_argument(
-        "-k", "--keypoints", type=int, help="Number of keypoints", required=True
-    )
-    parser.add_argument("-f", "--focal_length", type=float, required=True)
-    parser.add_argument(
-        "-n", "--num", type=int, help="Number of images to process (optional)"
-    )
-    parser.add_argument("--render", type=str, help="Path to store keypoint renders")
-    args = parser.parse_args()
+def make_serializable(tensor):
+    n = tensor.numpy()
+    if isinstance(n, bytes):
+        return n.decode("utf-8")
+    return n.tolist()
 
-    if os.path.exists(args.output):
+
+@click.command(help="Evaluate a model (Keras .h5 format).")
+@click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "-k",
+    "--keypoints",
+    help='Path to 3D reference points .npy file (optional). If omitted, looks for "{directory}/keypoints.npy"',
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option("-f", "--focal_length", type=float, required=True)
+@click.option("-n", "--num", type=int, help="Number of images to process (optional)")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(dir_okay=False),
+    help="Path to write output JSON (optional)",
+)
+@click.option(
+    "-r",
+    "--render",
+    type=click.Path(file_okay=False),
+    help="Directory to store keypoint renders (optional)",
+)
+def main(model_path, directory, keypoints, focal_length, num, output, render):
+    if output and os.path.exists(output):
         if not user_confirms("Output path exists. Overwrite?"):
             return
 
-    model = tf.compat.v2.saved_model.load(args.model)
-    cropsize = model.__call__.concrete_functions[0].inputs[0].shape[1]
-    data = utils.data.dataset_from_directory(
-        args.directory, cropsize, nb_keypoints=args.keypoints
+    if render:
+        os.makedirs(render, exist_ok=True)
+
+    model = tf.keras.models.load_model(model_path, compile=False)
+    model.compile(
+        optimizer=tf.keras.optimizers.SGD(), loss=lambda _: 0,
     )
-    if args.num:
-        data = data.take(args.num)
+    nb_keypoints = model.output.shape[-1] // 2
+    cropsize = model.input.shape[1]
 
-    ref_points = np.load(os.path.join(args.directory, "keypoints.npy")).reshape(
-        (-1, 3)
-    )[: args.keypoints]
-    # ref_points = np.tile(ref_points, [num_guesses // args.keypoints, 1])
+    keypoints_path = (
+        keypoints if keypoints else os.path.join(directory, "keypoints.npy")
+    )
+    ref_points = np.load(keypoints_path).reshape((-1, 3))[:nb_keypoints]
 
-    def make_serializable(tensor):
-        n = tensor.numpy()
-        if isinstance(n, bytes):
-            return n.decode("utf-8")
-        return n.tolist()
+    data = utils.data.dataset_from_directory(
+        directory, cropsize, nb_keypoints=nb_keypoints
+    )
+    if num:
+        data = data.take(num)
+    data = data.batch(32)
 
     results = []
-    for i, (image, metadata) in enumerate(data):
-        image = tf.cast(image * 127.5 + 127.5, tf.uint8).numpy()
-        start_time = time.time()
-        kps = model(image).numpy()
-        inference_time = time.time() - start_time
-        r_vec, t_vec, cam_matrix, coefs = utils.pose.solve_pose(
-            ref_points,
-            kps,
-            [args.focal_length, args.focal_length],
-            [cropsize, cropsize],
-            extra_crop_params={
-                "centroid": metadata["centroid"].numpy(),
-                "bbox_size": metadata["bbox_size"].numpy(),
-                "imdims": metadata["imdims"].numpy(),
-            },
-            ransac=True,
-        )
-        pose = Rotation.from_rotvec(np.squeeze(r_vec))
-        pnp_time = time.time() - start_time - inference_time
-        print(
-            f"Image: {i}, Model Time: {int(inference_time * 1000)}ms, PnP Time: {int(pnp_time * 1000)}ms"
-        )
-        result = utils.data.recursive_map_dict(metadata, make_serializable)
-        pos_err, pos_err_norm = utils.pose.position_error(
-            metadata["position"].numpy(), t_vec
-        )
-        result.update(
-            {
-                "detected_pose": pose.as_quat()[[3, 0, 1, 2]].tolist(),
-                "detected_position": np.squeeze(t_vec).tolist(),
-                "inference_time": inference_time,
-                "pnp_time": pnp_time,
-                "pose_error": utils.pose.geodesic_error(
-                    r_vec, metadata["pose"].numpy()
-                ).tolist(),
-                "position_error": pos_err.tolist(),
-                "position_error_norm": pos_err_norm.tolist(),
-            }
-        )
-        results.append(result)
-
-        if args.render:
-            os.makedirs(args.render, exist_ok=True)
-            kps = kps.reshape(-1, args.keypoints, 2).transpose([1, 0, 2])
-            hues = np.linspace(
-                0, 360, num=args.keypoints, endpoint=False, dtype=np.float32
+    errs_pose = []
+    errs_position = []
+    errs_by_keypoint = []
+    img_cnt = 0
+    for image_batch, truth_batch in tqdm.tqdm(data):
+        truth_batch = [
+            dict(zip(truth_batch.keys(), t)) for t in zip(*truth_batch.values())
+        ]
+        kps_batch = model.predict(image_batch)
+        kps_batch = utils.model.decode_displacement_field(kps_batch)
+        kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
+        for image, kps, truth in zip(image_batch, kps_batch.numpy(), truth_batch):
+            image = tf.cast(image * 127.5 + 127.5, tf.uint8).numpy()
+            kps_true = (truth["keypoints"] - truth["centroid"]) / truth[
+                "bbox_size"
+            ] * cropsize + (cropsize // 2)
+            r_vec, t_vec = utils.pose.solve_pose(
+                ref_points,
+                kps,
+                [focal_length, focal_length],
+                image.shape[:2],
+                extra_crop_params={
+                    "centroid": truth["centroid"],
+                    "bbox_size": truth["bbox_size"],
+                    "imdims": truth["imdims"],
+                },
+                ransac=True,
+                reduce_mean=False,
             )
-            colors = np.stack(
-                [
-                    hues,
-                    np.ones(args.keypoints, np.float32),
-                    np.ones(args.keypoints, np.float32),
-                ],
-                axis=-1,
+            errs_pose.append(utils.pose.geodesic_error(r_vec, truth["pose"]))
+            errs_position.append(utils.pose.position_error(t_vec, truth["position"])[1])
+            # TODO doesn't use all guesses
+            errs_by_keypoint.append(
+                [np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps, kps_true)]
             )
-            colors = np.squeeze(cv2.cvtColor(colors[None, ...], cv2.COLOR_HSV2BGR))
-            colors = (colors * 255).astype(np.uint8)
-            for color, guesses in zip(colors, kps):
-                for kp in guesses:
-                    cv2.circle(image, tuple(kp[::-1]), 3, tuple(map(int, color)), -1)
-            cv2.imwrite(os.path.join(args.render, f"{i}.png"), image)
+            if render:
+                kps = kps.reshape(-1, nb_keypoints, 2).transpose([1, 0, 2])
+                hues = np.linspace(
+                    0, 360, num=nb_keypoints, endpoint=False, dtype=np.float32
+                )
+                colors = np.stack(
+                    [
+                        hues,
+                        np.ones(nb_keypoints, np.float32),
+                        np.ones(nb_keypoints, np.float32),
+                    ],
+                    axis=-1,
+                )
+                colors = np.squeeze(cv2.cvtColor(colors[None, ...], cv2.COLOR_HSV2BGR))
+                colors = (colors * 255).astype(np.uint8)
+                for color, guesses in zip(colors, kps):
+                    for kp in guesses:
+                        cv2.circle(
+                            image, tuple(kp[::-1]), 3, tuple(map(int, color)), -1
+                        )
+                cv2.imwrite(os.path.join(render, f"{img_cnt:04d}.png"), image)
+            result = utils.data.recursive_map_dict(truth, make_serializable)
+            result.update(
+                {
+                    "detected_pose": utils.pose.to_rotation(r_vec)
+                    .as_quat()[[3, 0, 1, 2]]
+                    .tolist(),
+                    "detected_position": np.squeeze(t_vec).tolist(),
+                }
+            )
+            results.append(result)
+            img_cnt += 1
 
-    avg_inference_time = sum(result["inference_time"] for result in results) / len(
-        results
-    )
-    avg_pnp_time = sum(result["pnp_time"] for result in results) / len(results)
-    print(
-        f"Average inference time: {int(avg_inference_time* 1000)}ms, average PnP time: {int(avg_pnp_time * 1000)}ms"
-    )
-    pose_errs = np.array([result["pose_error"] for result in results])
-    position_errs = np.array([result["position_error_norm"] for result in results])
-    utils.pose.display_geodesic_stats(pose_errs, position_errs)
-    with open(args.output, "w") as f:
-        json.dump(results, f, indent=2)
+    # np.save(f"{output_path}/pose_errs.npy", np.array(errs_pose))
+    # np.save(f"{output_path}/position_errs.npy", np.array(errs_position))
+    # np.save(f"{output_path}/keypoint_errs.npy", np.array(errs_by_keypoint))
+    utils.pose.display_keypoint_stats(errs_by_keypoint)
+    utils.pose.display_geodesic_stats(np.array(errs_pose), np.array(errs_position))
 
-
-if __name__ == "__main__":
-    main()
+    if output:
+        with open(output, "w") as f:
+            json.dump(results, f, indent=2)

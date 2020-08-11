@@ -2,7 +2,7 @@ import tensorflow as tf
 import glob
 import os
 import json
-from rmltraintfmobilepose.rmltraintfmobilepose.train import KeypointsModel
+from .model import preprocess_image
 
 
 def recursive_map_dict(d, f):
@@ -21,6 +21,7 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
     :return: a Tensorflow dataset that generates (image, metadata) tuples where image is a [cropsize, cropsize, 3]
     Tensor and metadata is a dictionary of Tensors.
     """
+
     def generator():
         image_files = sorted(glob.glob(os.path.join(dir_path, "image_*")))
         meta_files = sorted(glob.glob(os.path.join(dir_path, "meta_*.json")))
@@ -41,28 +42,31 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
     def process(image_file, metadata):
         # load bounding box
         # TODO don't hardcode key, maybe
-        bbox = metadata['bboxes']['cygnus']
-        xmin = bbox['xmin']
-        xmax = bbox['xmax']
-        ymin = bbox['ymin']
-        ymax = bbox['ymax']
-        centroid = tf.convert_to_tensor([(ymax + ymin) / 2, (xmax + xmin) / 2], dtype=tf.float32)
+        bbox = metadata["bboxes"]["cygnus"]
+        xmin = bbox["xmin"]
+        xmax = bbox["xmax"]
+        ymin = bbox["ymin"]
+        ymax = bbox["ymax"]
+        centroid = tf.convert_to_tensor(
+            [(ymax + ymin) / 2, (xmax + xmin) / 2], dtype=tf.float32
+        )
         bbox_size = tf.cast(tf.maximum(xmax - xmin, ymax - ymin), tf.float32) * 1.25
 
         # load and crop image
         image_data = tf.io.read_file(image_file)
-        imdims, image = KeypointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
+        imdims, image = preprocess_image(image_data, centroid, bbox_size, cropsize)
 
         truth = {
-            'pose': tf.ensure_shape(metadata['pose'], [4]),
-            'bbox_size': tf.ensure_shape(bbox_size, []),
-            'centroid': tf.ensure_shape(centroid, [2]),
-            'imdims': imdims,
-            'position': tf.ensure_shape(metadata['translation'], [3])
+            "pose": tf.ensure_shape(metadata["pose"], [4]),
+            "bbox_size": tf.ensure_shape(bbox_size, []),
+            "centroid": tf.ensure_shape(centroid, [2]),
+            "imdims": imdims,
+            "position": tf.ensure_shape(metadata["translation"], [3]),
         }
         if nb_keypoints:
-            truth['keypoints'] = tf.cast(metadata['keypoints'][:nb_keypoints], tf.float32) * imdims
+            truth["keypoints"] = (
+                tf.cast(metadata["keypoints"][:nb_keypoints], tf.float32) * imdims
+            )
         return image, truth
 
     return dataset.map(process)
-

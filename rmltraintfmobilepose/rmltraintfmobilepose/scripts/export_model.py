@@ -1,4 +1,8 @@
-"""
+import tensorflow as tf
+import click
+from .. import utils
+
+help_string = """
 Freeze a model from the Keras .h5 checkpoint to the Tensorflow SavedModel format so that it
 can be easily served from anywhere. Requires Tensorflow 2.0.
 
@@ -12,19 +16,14 @@ The input shape can then be retrieved with:
 
 """
 
-import tensorflow as tf
-import argparse
-import numpy as np
-from rmltraintfkeypoints.train import KeypointsModel
 
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('model', type=str, help="Path to Keras .h5 file")
-    parser.add_argument('output', type=str, help="Output path")
-    args = parser.parse_args()
-
-    model = tf.keras.models.load_model(args.model, compile=False, custom_objects={'tf': tf})
+@click.command(help=help_string)
+@click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("output_path", type=click.Path(exists=False, file_okay=False))
+def main(model_path, output_path):
+    model = tf.keras.models.load_model(
+        model_path, compile=False, custom_objects={"tf": tf}
+    )
 
     # for some reason, directly trying to save the keras model isn't working,
     # so let's create a custom one as a workaround. This conveniently also
@@ -40,23 +39,18 @@ def main():
                 for variable in layer.variables:
                     setattr(self, variable.name, variable)
 
-        @tf.function(input_signature=[tf.TensorSpec(model.input.shape[1:], dtype=tf.uint8)])
+        @tf.function(
+            input_signature=[tf.TensorSpec(model.input.shape[1:], dtype=tf.uint8)]
+        )
         def __call__(self, image):
             batch_im = tf.expand_dims(image, 0)
-            normalized = tf.keras.applications.mobilenet_v2.preprocess_input(tf.cast(batch_im, tf.float32))
+            normalized = tf.keras.applications.mobilenet_v2.preprocess_input(
+                tf.cast(batch_im, tf.float32)
+            )
             df = model(normalized)
-            kps_batch = KeypointsModel.decode_displacement_field(df)
-            kps_batch = tf.transpose(kps_batch, [0, 3, 1, 2])
-            # if using the reduce_mean strategy, comment out the next line
-            # and pass ransac=False to calculate_pose_vectors.
-            kps_batch = tf.reshape(kps_batch, [tf.shape(kps_batch)[0], -1, 2])
-            # kps_batch = tf.reduce_mean(kps_batch, axis=1)
+            kps_batch = utils.model.decode_displacement_field(df)
             kps_batch = kps_batch * (self.cropsize // 2) + (self.cropsize // 2)
             return tf.squeeze(kps_batch)
 
     module = Module(model)
-    tf.saved_model.save(module, args.output)
-
-
-if __name__ == "__main__":
-    main()
+    tf.saved_model.save(module, output_path)
