@@ -4,12 +4,12 @@ import cv2
 import time
 
 
-def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None, ransac=True):
+def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_crop_params=None):
     """
     Calculates pose vectors using CV2's solvePNP.
     :param ref_points: 3D reference points, shape (n, 3)
     :param keypoints: 2D image keypoints in (y, x) pixel coordinates. Shape (m, 2), where m>=n and m is a
-        multiple of n. If m is greater than n, then keypoints will be interpreted as m // n guesses at the
+        multiple of n. If m is greater than n, then keypoints will be intepreted as m // n guesses at the
         location of each 3D keypoint. These guesses should be in guess-major order: i.e. (num_guesses, n).reshape(-1).
     :param focal_length: original camera focal length (vertical, horizontal)
     :param imdims: (height, width) current image dimensions
@@ -37,23 +37,24 @@ def calculate_pose_vectors(ref_points, keypoints, focal_length, imdims, extra_cr
 
     assert len(keypoints) % len(ref_points) == 0
     if len(keypoints) > len(ref_points):
+        ransac = True
         ref_points = np.tile(ref_points, [len(keypoints) // len(ref_points), 1])
+    else:
+        ransac = False
 
-    keypoints = keypoints[:, [1, 0]]
+    keypoints = keypoints.copy()
+    keypoints[:, [0, 1]] = keypoints[:, [1, 0]]
     if not ransac:
         ret, r_vec, t_vec = cv2.solvePnP(
             ref_points, keypoints,
             cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP)
     else:
-        # The reprojection error is the maximum pixel distance away
-        # a keypoint can be to be considered an inlier. A higher value
-        # can improve convergence speed is exchange for accuracy. The default
-        # is 8.
+        # t = time.time()
         ret, r_vec, t_vec, inliers = cv2.solvePnPRansac(
             ref_points, keypoints,
-            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP,
-            # reprojectionError=8
+            cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_EPNP
         )
+        # print(f'Time: {time.time() - t:.2f}, inliers: {len(inliers) if inliers is not None else 0}')
     if not ret:
         print('Pose solve failed')
         r_vec, t_vec = np.zeros([2, 3], dtype=np.float32)
@@ -75,7 +76,7 @@ def to_rotation(r):
 def geodesic_error(rot_pred, rot_truth):
     rot_pred, rot_truth = to_rotation(rot_pred), to_rotation(rot_truth)
     # fix weird 180-degree flip
-    # rot_pred = Rotation.from_euler('xyz', [np.pi, 0, 0]) * rot_pred
+    rot_pred = Rotation.from_euler('xyz', [np.pi, 0, 0]) * rot_pred
     return _quat_geodesic_error(rot_pred.as_quat(), rot_truth.as_quat())
 
 

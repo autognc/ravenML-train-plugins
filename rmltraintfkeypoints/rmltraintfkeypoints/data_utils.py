@@ -11,7 +11,7 @@ def recursive_map_dict(d, f):
     return f(d)
 
 
-def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
+def dataset_from_directory(dir_path, cropsize, nb_keypoints):
     """
     Get a Tensorflow dataset that generates samples from a directory with test data
     that is not in TFRecord format (i.e. a directory with image_*.png, meta_*.json, and bboxLabels_*.xml files).
@@ -53,15 +53,15 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
         image_data = tf.io.read_file(image_file)
         imdims, image = KeypointsModel.preprocess_image(image_data, centroid, bbox_size, cropsize)
 
+        keypoints = tf.cast(metadata['keypoints'][:nb_keypoints], tf.float32) * imdims
         truth = {
+            'keypoints': keypoints,
             'pose': tf.ensure_shape(metadata['pose'], [4]),
             'bbox_size': tf.ensure_shape(bbox_size, []),
             'centroid': tf.ensure_shape(centroid, [2]),
             'imdims': imdims,
-            'position': tf.ensure_shape(metadata['translation'], [3])
+            # 'position': tf.ensure_shape(metadata['position'], [3])
         }
-        if nb_keypoints:
-            truth['keypoints'] = tf.cast(metadata['keypoints'][:nb_keypoints], tf.float32) * imdims
         return image, truth
 
     return dataset.map(process)

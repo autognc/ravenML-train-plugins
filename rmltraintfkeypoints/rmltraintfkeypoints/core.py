@@ -2,8 +2,7 @@ import tqdm
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import user_confirms
-from ravenml.utils.dataset import get_dataset, dataset_cache
-from ravenml.data.interfaces import Dataset
+from ravenml.utils.dataset import get_dataset
 from ravenml.utils.plugins import raise_parameter_error
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -98,14 +97,11 @@ def train(ctx, train: TrainInput, comet):
 @click.pass_context
 def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=False, render_poses=False):
     # ensure dataset exists and get its path
-    if os.path.exists(dataset_cache.path / dataset_name):
-        dataset = Dataset(dataset_name, {}, dataset_cache.path / dataset_name)
-    else:
-        try:
-            dataset = get_dataset(dataset_name)
-        # exit if the dataset could not be found on S3
-        except ValueError as e:
-            raise_parameter_error(dataset_name, 'dataset name')
+    try:
+        dataset = get_dataset(dataset_name)
+    # exit if the dataset could not be found on S3
+    except ValueError as e:
+        raise_parameter_error(dataset_name, 'dataset name')
 
     if os.path.exists(output_path):
         if user_confirms('Artifact storage location contains old data. Overwrite?'):
@@ -115,7 +111,7 @@ def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=Fals
     os.makedirs(output_path)
 
     errs_pose = []
-    errs_position = []
+    errs_position = [0]
     errs_by_keypoint = []
     model = tf.keras.models.load_model(model_path, compile=False)
     if model.name == 'mobilepose':
@@ -141,10 +137,7 @@ def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=Fals
         if model.name == 'mobilepose':
             kps_batch = KeypointsModel.decode_displacement_field(kps_batch)
             kps_batch = tf.transpose(kps_batch, [0, 3, 1, 2])
-            # if using the reduce_mean strategy, comment out the next line
-            # and pass ransac=False to calculate_pose_vectors.
             kps_batch = tf.reshape(kps_batch, [tf.shape(kps_batch)[0], -1, 2]).numpy()
-            # kps_batch = tf.reduce_mean(kps_batch, axis=1).numpy()
         else:
             kps_batch = kps_batch.reshape(kps_batch.shape[0], -1, 2)
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
@@ -159,36 +152,46 @@ def eval(ctx, model_path, dataset_name, output_path, pnp_focal_length, plot=Fals
                     'centroid': truth_batch['centroid'][i],
                     'bbox_size': truth_batch['bbox_size'][i],
                     'imdims': truth_batch['imdims'][i],
-                },
-                ransac=True,
+                }
             )
             errs_pose.append(utils.geodesic_error(r_vec, truth_batch['pose'][i]))
-            errs_position.append(
-                np.linalg.norm(truth_batch['position'][i] - np.squeeze(t_vec)) / np.linalg.norm(truth_batch['position'][i])
-            )
+            # errs_position.append(
+                # np.linalg.norm(truth_batch['position'][i] - np.squeeze(t_vec)) / np.linalg.norm(truth_batch['position'][i])
+            # )
             # TODO doesn't use all guesses for mobilepose
             errs_by_keypoint.append([
                 np.linalg.norm(kp_true - kp)
                 for kp, kp_true in zip(kps, kps_true)
             ])
             if render_poses:
-                kps = kps.reshape(-1, nb_keypoints, 2).transpose([1, 0, 2])
-                hues = np.linspace(0, 360, num=nb_keypoints, endpoint=False, dtype=np.float32)
-                colors = np.stack([hues, np.ones(nb_keypoints, np.float32), np.ones(nb_keypoints, np.float32)],
-                                  axis=-1)
-                colors = np.squeeze(cv2.cvtColor(colors[None, ...], cv2.COLOR_HSV2BGR))
-                colors = (colors * 255).astype(np.uint8)
-                for color, guesses in zip(colors, kps):
-                    for kp in guesses:
-                        cv2.circle(image, tuple(kp[::-1]), 3, tuple(map(int, color)), -1)
-                cv2.imwrite(f'{output_path}/pose-render-{img_cnt:04d}.png', image)
+                for kp_idx in range(len(kps)):
+                    y = int(kps[kp_idx, 0])
+                    x = int(kps[kp_idx, 1])
+                    ay = int(kps_true[kp_idx, 0])
+                    ax = int(kps_true[kp_idx, 1])
+                    cv2.circle(image, (x, y), 5, (255, 0, 255), -1)
+                    cv2.circle(image, (ax, ay), 5, (255, 255, 255), -1)
+                    cv2.line(image, (x, y), (ax, ay), (255, 0, 0), 3)
+                landmarks = cv2.projectPoints(np.array([
+                    [0, 5, -3.18566],
+                    [0, -5, -3.18566],
+                    [0, 0, -3.18566],
+                    [0, 0, 3.18566],
+                ], np.float32), r_vec, t_vec, cam_matrix, coefs)[0].squeeze()
+                p1, p2, p3, p4 = landmarks
+                cv2.line(image, (p1[0], p1[1]), (p2[0], p2[1]), (255, 0, 255), 6)
+                cv2.line(image, (p3[0], p3[1]), (p4[0], p4[1]), (255, 0, 255), 6)
+                cv2.line(image, (p1[0], p1[1]), (p4[0], p4[1]), (255, 0, 255), 6)
+                cv2.line(image, (p2[0], p2[1]), (p4[0], p4[1]), (255, 0, 255), 6)
+                cv2.imwrite(f'{artifact_path}/pose-render-{img_cnt:04d}.png',
+                            cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             img_cnt += 1
 
     np.save(f'{output_path}/pose_errs.npy', np.array(errs_pose))
     np.save(f'{output_path}/position_errs.npy', np.array(errs_position))
     np.save(f'{output_path}/keypoint_errs.npy', np.array(errs_by_keypoint))
     _display_keypoint_stats(errs_by_keypoint)
-    display_geodesic_stats('Model Preds', np.array(errs_pose), np.array(errs_position), plot=plot)
+    _display_geodesic_stats('Model Preds', np.array(errs_pose), np.array(errs_position), plot=plot)
 
 
 @tf_keypoints.command(help="Evaluate ground truth PnP.")
@@ -237,10 +240,10 @@ def evalpnp(ctx, dataset_name, keypoints, pnp_focal_length, swap_random_percent)
             # np.linalg.norm(position - np.squeeze(t_vec)) / np.linalg.norm(position)
         # )
 
-    display_geodesic_stats('PnP on truth, |kps|={})'.format(nb_keypoints), errs_pose, errs_position)
+    _display_geodesic_stats('PnP on truth, |kps|={})'.format(nb_keypoints), errs_pose, errs_position)
 
 
-def display_geodesic_stats(title, errs_pose, errs_position, plot=False):
+def _display_geodesic_stats(title, errs_pose, errs_position, plot=False):
     print(f'\n---- Geodesic Error Stats ({title}) ----')
     stats = {
         'mean': np.mean(errs_pose),

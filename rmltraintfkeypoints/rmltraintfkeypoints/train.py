@@ -579,7 +579,6 @@ class KeypointsModel:
             return x_coords, y_coords
         if keypoints_mode == 'coords':
             keypoints = tf.reshape(parsed_kps, [-1, 2])[:nb_keypoints]
-            keypoints *= img_size
             keypoints = (keypoints - centroid) / (bbox_size / 2)
             return tf.reshape(keypoints, [nb_keypoints * 2])
         elif keypoints_mode == 'mask':
