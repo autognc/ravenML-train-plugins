@@ -6,10 +6,11 @@ import cv2
 import time
 from PIL import Image
 import rmltraintfbbox.validation.utils as utils
-from rmltraintfbbox.validation.model import BoundingBoxModel
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 import object_detection.utils.visualization_utils as visualization
-from object_detection.utils import label_map_util
+from object_detection.utils import label_map_util, config_util
+from object_detection.builders import model_builder
+from object_detection import model_lib_v2, model_lib
 
 def get_category_index(label_path: str):
     label_map = label_map_util.load_labelmap(label_path)
@@ -26,7 +27,7 @@ def get_num_classes(label_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--model', type=str, help="Path to saved_model directory", required=True)
+    parser.add_argument('-e', '--exportdir', type=str, help="Path to export directory", required=True)
     parser.add_argument('-l', '--labelmap', type=str, help="Path to label map (.pbtxt)", required=True)
     parser.add_argument('-d', '--directory', type=str, help="Path to image directory", required=True)
     parser.add_argument('-o', '--output', type=str, help="Path to put output", required=True)
@@ -46,25 +47,22 @@ def main():
         image_dataset = image_dataset.take(args.num)
         truth_data = truth_data[:args.num]
 
-    detection_model = tf.keras.models.load_model(args.model)
+    detection_model = tf.saved_model.load(args.exportdir + '/saved_model')
+
     category_index = get_category_index(args.labelmap)
     evaluator = BoundingBoxEvaluator(category_index)
     for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
         true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
         start = time.time()
-        output = detection_model(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8))
-        print(output)
+        output = detection_model.call(tf.expand_dims(image, axis=0))
         inference_time = time.time() - start
         evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
-        print(output['detection_classes'])
         if args.vis:
-            drawn_img = visualization.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), output['detection_boxes'], tf.cast(output['detection_classes'], dtype=tf.int32), output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0)
+            drawn_img = visualization.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), output['detection_boxes'], tf.cast(output['detection_classes'], dtype=tf.int32), output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0, use_normalized_coordinates=True)
             tf.keras.preprocessing.image.save_img(args.output+f'/img{i}.png', drawn_img[0])
 
     evaluator.dump(os.path.join(args.output, 'validation_results.pickle'))
     evaluator.calculate_default_and_save(args.output)
-
-    
 
 if __name__ == "__main__":
     main()
