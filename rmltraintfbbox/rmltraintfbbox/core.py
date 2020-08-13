@@ -20,6 +20,8 @@ import re
 import glob
 import json
 import traceback
+import time
+import tensorflow as tf
 import rmltraintfbbox.validation.utils as utils
 from contextlib import ExitStack
 from pathlib import Path
@@ -33,7 +35,9 @@ from rmltraintfbbox.utils.exporter import export_inference_graph
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 from google.protobuf import text_format
 from matplotlib import pyplot as plt
-import time
+from object_detection import model_lib, model_lib_v2, inputs, protos
+from object_detection.builders import optimizer_builder, model_builder
+from object_detection.utils import label_map_util, visualization_utils, config_util
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -41,7 +45,7 @@ checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
 ### OPTIONS ###
 
 ### COMMANDS ###
-@click.group(help='TensorFlow Object Detection with bounding boxes.')
+@click.group(help='TensorFlow2 Object Detection with bounding boxes.')
 @click.pass_context
 def tf_bbox(ctx):
     pass
@@ -57,8 +61,6 @@ def train(ctx: click.Context, train: TrainInput):
     # the user did not pass a config. see ravenml core file train/commands.py for more detail
     
     # NOTE: after training, you must create an instance of TrainOutput and return it
-    # import necessary libraries
-    cli_spinner("Importing TensorFlow...", _import_od)
 
     ## SET UP CONFIG ##
     config = train.plugin_config
@@ -139,7 +141,7 @@ def train(ctx: click.Context, train: TrainInput):
     global_step = tf.Variable(
         0, trainable=False, dtype=tf.int64, name='global_step',
         aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
-    optimizer, (learning_rate,) = od.builders.optimizer_builder.build(
+    optimizer, (learning_rate,) = optimizer_builder.build(
         train_config.optimizer, global_step=global_step)
 
     if callable(learning_rate):
@@ -158,7 +160,7 @@ def train(ctx: click.Context, train: TrainInput):
     def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step):
 
         features, labels = train_input_iterator.next()
-        loss = model_lib2.eager_train_step(detection_model, features,
+        loss = model_lib_v2.eager_train_step(detection_model, features,
                             labels, train_config.unpad_groundtruth_tensors,
                             optimizer, learning_rate_fn(),
                             add_regularization_loss=True,
@@ -174,7 +176,7 @@ def train(ctx: click.Context, train: TrainInput):
         sys.stdout = text_trap
         sys.stderr = text_trap
         
-        metrics = model_lib2.eager_eval_loop(detection_model, configs, eval_input, global_step=global_step)
+        metrics = model_lib_v2.eager_eval_loop(detection_model, configs, eval_input, global_step=global_step)
         
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
@@ -197,12 +199,14 @@ def train(ctx: click.Context, train: TrainInput):
 
             loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
             
-            if step % 100 == 0:
+            if step % 1 == 0:
                 print(f'Training loss at step {step}: {loss}')
                 manager.save()
 
-            if step % 500 == 0:
-                evaluate(detection_model, configs, eval_input, global_step)
+            if step % 5 == 0:
+                metrics = evaluate(detection_model, configs, eval_input, global_step)
+                if comet:
+                    experiment.log_metrics(metrics, step=step)
                 
 
         training_time = time.time() - start
@@ -213,10 +217,7 @@ def train(ctx: click.Context, train: TrainInput):
     metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
 
     # get extra config files
-    extra_files, final_ckpt = _get_paths_for_extra_files(base_dir)
-
-    if comet:
-        experiment.log_asset(model_path)
+    extra_files = _get_paths_for_extra_files(base_dir)
 
     # TODO: make evaluation optional
     if config['evaluate']:
@@ -233,7 +234,7 @@ def train(ctx: click.Context, train: TrainInput):
             image_dataset = utils.get_image_dataset(test_path)
             truth_data = list(utils.gen_truth_data(test_path))
 
-            category_index = od.utils.label_map_util.create_category_index_from_labelmap(label_path)
+            category_index = label_map_util.create_category_index_from_labelmap(label_path)
             evaluator = BoundingBoxEvaluator(category_index)
 
             for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
@@ -248,7 +249,7 @@ def train(ctx: click.Context, train: TrainInput):
 
             evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
             if comet:
-                experiment.log_asset('validation_results.pickle')
+                experiment.log_asset(os.path.join(output_path,'validation_results.pickle'))
             evaluator.calculate_default_and_save(output_path)
 
             extra_files.append(os.path.join(output_path, 'stats.json'))
@@ -266,6 +267,7 @@ def train(ctx: click.Context, train: TrainInput):
 
     if comet:
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
+        experiment.log_asset_folder(saved_model_path)
 
     # export metadata locally
     with open(base_dir / 'metadata.json', 'w') as f:
@@ -307,9 +309,9 @@ def load_fine_tune_checkpoint(
       checkpoint
     ValueError: if `checkpoint_version` is not train_pb2.CheckpointVersion.V2
   """
-  if not model_lib2.is_object_based_checkpoint(checkpoint_path):
+  if not model_lib_v2.is_object_based_checkpoint(checkpoint_path):
     raise IOError('Checkpoint is expected to be an object-based checkpoint.')
-  if checkpoint_version == od.protos.train_pb2.CheckpointVersion.V1:
+  if checkpoint_version == protos.train_pb2.CheckpointVersion.V1:
     raise ValueError('Checkpoint version should be V2')
 
   features, labels = iter(input_dataset).next()
@@ -321,7 +323,7 @@ def load_fine_tune_checkpoint(
     labels = model_lib.unstack_batch(
         labels, unpad_groundtruth_tensors=unpad_groundtruth_tensors)
 
-    return model_lib2._compute_losses_and_predictions_dicts(
+    return model_lib_v2._compute_losses_and_predictions_dicts(
         model,
         features,
         labels)
@@ -392,70 +394,4 @@ def _get_paths_for_extra_files(artifact_path: Path):
     #        extras.append(extras_path / 'eval_0' / f)
 
     extras.append(labels_path)
-    return extras, checkpoint_path
-
-# stdout redirection found at https://codingdose.info/2018/03/22/supress-print-output-in-python/
-def _import_od():
-    """ Imports the necessary libraries for object detection training.
-    Used to avoid importing them at the top of the file where they get imported
-    on every ravenML command call, even those not to this plugin.
-    
-    Also suppresses warning outputs from the TF OD API.
-    """
-    # create a text trap and redirect stdout
-    # to suppress printed warnings from object detection and tf
-    text_trap = io.StringIO()
-    sys.stdout = text_trap
-    sys.stderr = text_trap
-    
-    # Calls to _dynamic_import below map to the following standard imports:
-    #
-    # import tensorflow as tf
-    # from object_detection import model_hparams
-    # from object_detection import model_lib
-    _dynamic_import('tensorflow', 'tf')
-    _dynamic_import('object_detection.model_hparams', 'model_hparams')
-    _dynamic_import('object_detection.model_lib_v2', 'model_lib2')
-    _dynamic_import('object_detection.model_lib', 'model_lib')
-    _dynamic_import('object_detection.builders.model_builder', 'model_builder')
-    _dynamic_import('object_detection.utils.config_util', 'config_util')
-    #_dynamic_import('object_detection.exporter_lib_v2', 'exporter')
-    _dynamic_import('object_detection.inputs', 'inputs')
-    _dynamic_import('object_detection', 'od')
-    _dynamic_import('object_detection.protos', 'pipeline_pb2', asfunction=True)
-    
-    # now restore stdout function
-    sys.stdout = sys.__stdout__
-    sys.stderr = sys.__stderr__
-    
-# this function is derived from https://stackoverflow.com/a/46878490
-# NOTE: this function should be used in all plugins, but the function is NOT
-# importable because of the use of globals(). You must copy the code.
-def _dynamic_import(modulename, shortname = None, asfunction = False):
-    """ Function to dynamically import python modules into the global scope.
-
-    Args:
-        modulename (str): name of the module to import (ex: os, ex: os.path)
-        shortname (str, optional): desired shortname binding of the module (ex: import tensorflow as tf)
-        asfunction (bool, optional): whether the shortname is a module function or not (ex: from time import time)
-        
-    Examples:
-        Whole module import: i.e, replace "import tensorflow"
-        >>> _dynamic_import('tensorflow')
-        
-        Named module import: i.e, replace "import tensorflow as tf"
-        >>> _dynamic_import('tensorflow', 'tf')
-        
-        Submodule import: i.e, replace "from object_detction import model_lib"
-        >>> _dynamic_import('object_detection.model_lib', 'model_lib')
-        
-        Function import: i.e, replace "from ravenml.utils.config import get_config"
-        >>> _dynamic_import('ravenml.utils.config', 'get_config', asfunction=True)
-        
-    """
-    if shortname is None: 
-        shortname = modulename
-    if asfunction is False:
-        globals()[shortname] = importlib.import_module(modulename)
-    else:        
-        globals()[shortname] = getattr(importlib.import_module(modulename), shortname)
+    return extras
