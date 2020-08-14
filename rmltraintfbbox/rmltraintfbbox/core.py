@@ -239,12 +239,13 @@ def train(ctx: click.Context, train: TrainInput):
 
             for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
                 true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
-                truth = {'groundtruth_boxes': bbox, 'groundtruth_classes': 1}
                 start = time.time()
                 output = detection_model.call(tf.expand_dims(image, axis=0))
                 inference_time = time.time() - start
                 evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
-                drawn_img = od.utils.visualization_utils.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), output['detection_boxes'], tf.cast(output['detection_classes'] + 1, dtype=tf.int32), output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0)
+                drawn_img = visualization_utils.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), 
+                                                output['detection_boxes'], tf.cast(output['detection_classes'] + 1, dtype=tf.int32), 
+                                                output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0)
                 tf.keras.preprocessing.image.save_img(output_path+f'/img{i}.png', drawn_img[0])
 
             evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
@@ -267,12 +268,11 @@ def train(ctx: click.Context, train: TrainInput):
 
     if comet:
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
-        experiment.log_asset_folder(saved_model_path)
 
     # export metadata locally
     with open(base_dir / 'metadata.json', 'w') as f:
         json.dump(train.metadata, f, indent=2)
-        
+
     result = TrainOutput(Path(saved_model_path), extra_files)
     return result
     

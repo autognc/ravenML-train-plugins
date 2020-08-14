@@ -59,7 +59,10 @@ def main():
         output['detection_classes'] = output['detection_classes'] - 1
         evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
         if args.vis:
-            drawn_img = visualization.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), output['detection_boxes'], tf.cast(output['detection_classes'] + 1, dtype=tf.int32), output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0, use_normalized_coordinates=True)
+            drawn_img = visualization.draw_bounding_boxes_on_image_tensors(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8), 
+                                        output['detection_boxes'], tf.cast(output['detection_classes'] + 1, dtype=tf.int32), 
+                                        output['detection_scores'], category_index, max_boxes_to_draw=1, min_score_thresh=0, 
+                                        use_normalized_coordinates=True)
             tf.keras.preprocessing.image.save_img(args.output+f'/img{i}.png', drawn_img[0])
 
     evaluator.dump(os.path.join(args.output, 'validation_results.pickle'))
