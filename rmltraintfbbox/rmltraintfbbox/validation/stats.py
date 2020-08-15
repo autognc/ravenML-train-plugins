@@ -137,14 +137,16 @@ class BoundingBoxEvaluator:
         for i, (output_dict, bbox_dict) in enumerate(zip(self.outputs, self.bboxes)):
             for class_id, cls in self.category_index.items():
                 class_name = cls['name']
-                outputs = output_dict[class_name]  # list of (score, bbox) for this class
+                #should this be .get?
+                outputs = output_dict.get(class_name)  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)  # bbox for this class
 
                 # add ground truth for this class and this image to the evaluator
                 if bbox:
                     boxes = np.array([[bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax']]], dtype=np.float32)
                 else:
-                    boxes = np.empty([0, 4], dtype=np.float32)
+                    #TODO: make sure eval is correct on occluded images
+                    boxes = np.empty([1, 4], dtype=np.float32)
                 groundtruth_dict = {
                     InputDataFields.groundtruth_boxes: boxes,
                     InputDataFields.groundtruth_classes: np.full(1, class_id, dtype=np.float32)
@@ -153,14 +155,15 @@ class BoundingBoxEvaluator:
                 # od_evaluator.add_single_ground_truth_image_info(i, groundtruth_dict)
 
                 # add detections for this class and this image to the evaluator
-                scores, boxes = zip(*outputs)
-                boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in boxes]
-                detections_dict = {
-                    DetectionResultFields.detection_boxes: np.array(boxes, dtype=np.float32),
-                    DetectionResultFields.detection_scores: np.array(scores, dtype=np.float32),
-                    DetectionResultFields.detection_classes: np.full(len(boxes), class_id, dtype=np.float32)
-                }
-                coco_evaluator.add_single_detected_image_info(i, detections_dict)
+                if outputs:
+                    scores, boxes = zip(*outputs)
+                    boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in boxes]
+                    detections_dict = {
+                        DetectionResultFields.detection_boxes: np.array(boxes, dtype=np.float32),
+                        DetectionResultFields.detection_scores: np.array(scores, dtype=np.float32),
+                        DetectionResultFields.detection_classes: np.full(len(boxes), class_id, dtype=np.float32)
+                    }
+                    coco_evaluator.add_single_detected_image_info(i, detections_dict)
                 # od_evaluator.add_single_detected_image_info(i, detections_dict)
 
         result = coco_evaluator.evaluate()
@@ -191,7 +194,7 @@ class BoundingBoxEvaluator:
         } for cls in self.classes}
         for output_dict, bbox_dict in zip(self.outputs, self.bboxes):
             for class_name in self.classes:
-                outputs = output_dict[class_name]  # list of (score, bbox) for this class
+                outputs = output_dict.get(class_name) # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)
 
                 if outputs and outputs[0][0] >= confidence_threshold:

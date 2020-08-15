@@ -14,6 +14,7 @@ import os
 import click 
 import io
 import sys
+import shutil
 import yaml
 import importlib
 import re
@@ -262,17 +263,24 @@ def train(ctx: click.Context, train: TrainInput):
                     experiment.log_image(img)
 
     #export detection_model as SavedModel
-    saved_model_path = model_dir + '/export'
+    saved_model_dir = os.path.join(model_dir,'export')
     configproto = config_util.create_pipeline_proto_from_configs(configs)
-    export_inference_graph('image_tensor', configproto, model_dir, saved_model_path)
-
+    export_inference_graph('image_tensor', configproto, model_dir, saved_model_dir)
+    
+    #zip files in export directory and add to extra_files
+    #shutil.make_archive(os.path.join(saved_model_dir,'export'), 'zip', model_dir, saved_model_dir)
+    shutil.make_archive(os.path.join(saved_model_dir,'export'), 'zip', model_dir, 'export')
+    extra_files.append(os.path.join(saved_model_dir, 'export.zip'))
+    saved_model_path = os.path.join(saved_model_dir, 'saved_model', 'saved_model.pb' )
+    
     if comet:
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
     # export metadata locally
     with open(base_dir / 'metadata.json', 'w') as f:
         json.dump(train.metadata, f, indent=2)
-
+    
+    extra_files = [Path(f) for f in extra_files]
     result = TrainOutput(Path(saved_model_path), extra_files)
     return result
     
@@ -362,7 +370,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
     # get checkpoints
     extras_path = artifact_path / 'models' / 'model'
     files = os.listdir(extras_path)
-
+    
     # path to label map
     labels_path = artifact_path / 'data' / 'label_map.pbtxt'
 
@@ -388,6 +396,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
     for f in os.listdir(extras_path):
         if f.startswith('events.out'):
             extras.append(extras_path / f)
+    
 
     #for f in os.listdir(extras_path / 'eval_0'):
     #    if f.startswith('events.out'):
