@@ -200,11 +200,11 @@ def train(ctx: click.Context, train: TrainInput):
 
             loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
             
-            if step % 1 == 0:
+            if step % 100 == 0:
                 print(f'Training loss at step {step}: {loss}')
                 manager.save()
 
-            if step % 5 == 0:
+            if step % 500 == 0:
                 metrics = evaluate(detection_model, configs, eval_input, global_step)
                 if comet:
                     experiment.log_metrics(metrics, step=step)
