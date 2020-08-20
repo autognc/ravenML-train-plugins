@@ -54,7 +54,7 @@ def main():
     for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
         true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
         start = time.time()
-        output = detection_model.call(tf.expand_dims(image, axis=0))
+        output = detection_model(tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8))
         inference_time = time.time() - start
         output['detection_classes'] = output['detection_classes'] - 1
         evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
