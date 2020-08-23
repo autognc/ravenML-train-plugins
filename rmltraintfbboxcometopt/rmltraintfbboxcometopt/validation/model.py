@@ -27,7 +27,6 @@ class BoundingBoxModel:
     def run_inference_on_single_image(self, image, vis=False, vis_threshold=0.0):
         """
         Must be called inside a "with start_session():" block.
-
         :param image: NumPy array, shape (h, w, 3)
         :param vis: Whether or not to draw the top detection for each class on top of the input image and return it.
         :param vis_threshold: Only has an effect if vis is true. If the top detection's confidence score is

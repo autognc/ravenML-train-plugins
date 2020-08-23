@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 
 # determine GPU or CPU install via env variable
 gpu = os.getenv('RML_GPU')
-tensorflow_pkg = 'tensorflow==1.14.0' if not gpu else 'tensorflow-gpu==1.14.0'
+tensorflow_pkg = 'tensorflow==2.3.0' if not gpu else 'tensorflow-gpu==2.3.0'
 
 setup(
     name='rmltraintfbboxcometopt',
@@ -23,7 +23,7 @@ setup(
     install_requires=[
         'numpy==1.16.4',
         'cython==0.29.13',
-        'object-detection @ https://github.com/dlfonseka/object-detection/tarball/object-detection#egg=object-detection',
+        'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
         'absl-py==0.8.0',
         'pycocotools-fix==2.0.0.1',
         'matplotlib==3.1.1',
@@ -31,17 +31,14 @@ setup(
         'pillow==6.1.0',
         'lxml==4.4.0',
         'jupyter==1.0.0',
-        'comet-ml==3.1.12',
+        'comet-ml==2.0.13',
         'opencv-python==4.1.2.30',
+        'six==1.13.0',
+        'scipy==1.4.1',
+        'halo==0.0.29',
+        'urllib3==1.24.3',
         tensorflow_pkg,
 	    'shortuuid'
-    ],
-    data_files = [
-        ('deeplabv3_mnv2_dm05_pascal_trainaug', [
-            'frozen_inference_graph.pb',
-            'model.ckpt.data-00000-of-00001',
-            'model.ckpt.index'
-        ])
     ],
     entry_points='''
         [ravenml.plugins.train]
