@@ -220,8 +220,7 @@ def train(ctx: click.Context, train: TrainInput):
     # get extra config files
     extra_files = _get_paths_for_extra_files(base_dir)
 
-    # TODO: make evaluation optional
-    if config['evaluate']:
+    if config.get('evaluate') == True:
         click.echo("Evaluating model...")
         with ExitStack() as stack:
             if comet:
