@@ -10,6 +10,7 @@ from __future__ import print_function
 
 from comet_ml import Optimizer, Experiment
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'#remove this!
 import click 
 import io
 import sys
@@ -134,7 +135,8 @@ def train(ctx: click.Context, train: TrainInput):
 
     opt = Optimizer(optconfig, project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment', api_key='mZEpHIIyCDmQWeufDuOiRhOeU')
     def _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents):
-
+        
+        
         config_update = {}
         for key in optconfig['parameters'].keys():
             config_update[key] = experiment.get_parameter(key)
@@ -181,13 +183,14 @@ def train(ctx: click.Context, train: TrainInput):
         else:
           learning_rate_fn = lambda: learning_rate
         print(train_config)
+        """
         #restore from checkpoint
         load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint, 
                                             train_config.fine_tune_checkpoint_type,
                                             train_config.fine_tune_checkpoint_version,
                                             train_input, 
                                             train_config.unpad_groundtruth_tensors)
-
+        """
         @tf.function
         def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step):
 
@@ -310,6 +313,9 @@ def train(ctx: click.Context, train: TrainInput):
         #    metadata['validation_error'] = traceback.format_exc()
         #    mAP = None
         extra_files = [Path(f) for f in extra_files]
+        # This should clear the old model from memory, although this might not be necessary
+        tf.keras.backend.clear_session()
+        
         return mAP, TrainOutput(Path(saved_model_path), extra_files)
     
     count = 0
