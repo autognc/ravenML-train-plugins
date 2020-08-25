@@ -371,7 +371,7 @@ def _get_paths_for_extra_files(artifact_path: Path):
     files = os.listdir(extras_path)
     
     # path to label map
-    labels_path = artifact_path / 'data' / 'label_map.pbtxt'
+    labels_path = artifact_path / 'label_map.pbtxt'
 
     checkpoints = [f for f in files if checkpoint_regex.match(f)]
 
