@@ -44,6 +44,6 @@ setup(
     ],
     entry_points='''
         [ravenml.plugins.train]
-        tf_bbox=rmltraintfbbox.core:tf_bbox
+        tf_bbox_legacy=rmltraintfbboxlegacy.core:tf_bbox_legacy
     '''
 )
