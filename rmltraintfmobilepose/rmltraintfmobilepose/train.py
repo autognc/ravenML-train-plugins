@@ -129,9 +129,7 @@ class KeypointsModel:
 
         cropsize = self.crop_size
 
-        def _parse_function(example):
-            parsed = tf.io.parse_single_example(example, features)
-
+        def _parse_function(parsed):
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed["image/height"], tf.float32)
             width = tf.cast(parsed["image/width"], tf.float32)
@@ -209,10 +207,12 @@ class KeypointsModel:
             )
             return image, truth
 
+        """
         with open(
             os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r"
         ) as f:
             num_examples = int(f.read())
+        """
         filenames = tf.io.gfile.glob(
             os.path.join(self.data_dir, f"{split_name}.record-*")
         )
@@ -222,15 +222,18 @@ class KeypointsModel:
             dataset = dataset.cache()
         if train:
             dataset = dataset.shuffle(self.hp["shuffle_buffer_size"])
-        return dataset.map(_parse_function, num_parallel_calls=16), num_examples
+
+        dataset = dataset.map(lambda example: tf.io.parse_single_example(example, features), num_parallel_calls=16)
+        dataset = dataset.filter(lambda parsed: len(parsed["image/object/bbox/xmin"].values) > 0)
+        return dataset.map(_parse_function, num_parallel_calls=16)
 
     def train(self, logdir, experiment=None):
-        train_dataset, num_train = self._get_dataset("train", True)
-        train_dataset = train_dataset.batch(self.hp["batch_size"]).repeat()
+        train_dataset = self._get_dataset("train", True)
+        train_dataset = train_dataset.batch(self.hp["batch_size"])
         if self.hp["prefetch_num_batches"]:
             train_dataset = train_dataset.prefetch(self.hp["prefetch_num_batches"])
-        val_dataset, num_val = self._get_dataset("test", False)
-        val_dataset = val_dataset.batch(self.hp["batch_size"]).repeat()
+        val_dataset = self._get_dataset("test", False)
+        val_dataset = val_dataset.batch(self.hp["batch_size"])
 
         # imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
         # for img, kp in zip(imgs, kps):
@@ -261,7 +264,7 @@ class KeypointsModel:
                 tf.keras.callbacks.ModelCheckpoint(
                     model_path_latest, save_best_only=False,
                 ),
-                pose_error_callback,
+                # pose_error_callback,
             ]
 
             # if this is the first phase, generate a new model with fresh weights.
@@ -293,9 +296,9 @@ class KeypointsModel:
                 model.fit(
                     train_dataset,
                     epochs=phase["epochs"],
-                    steps_per_epoch=num_train // self.hp["batch_size"],
+                    # steps_per_epoch=num_train // self.hp["batch_size"],
                     validation_data=val_dataset,
-                    validation_steps=num_val // self.hp["batch_size"],
+                    # validation_steps=num_val // self.hp["batch_size"],
                     callbacks=callbacks,
                 )
             except Exception:
