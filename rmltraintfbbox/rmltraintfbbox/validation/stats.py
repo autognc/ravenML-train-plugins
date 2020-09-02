@@ -57,8 +57,9 @@ class BoundingBoxEvaluator:
     def add_single_result(self, output, true_shape, inference_time, bbox, centroid, image_size=None, distance=None):
         """
         Add single inference result to the evaluation.
-        :param output: the parsed output from a BoundingBoxModel inference.
-        :param inference_time: the inference time from a BoundingBoxModel inference.
+        :param output: the parsed output from a detection model inference.
+        :param true_shape: the shape of the original image passed into the detection model
+        :param inference_time: the inference time from a detection model inference.
         :param bbox: a dict {classname: bbox} where bbox has keys keys 'xmin', 'xmax', 'ymin',
             and 'ymax' in non-normalized (pixel) coordinates.
         :param centroid: a dict {classname: centroid} where classname is a tuple (y, x) in
