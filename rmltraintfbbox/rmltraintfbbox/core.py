@@ -68,8 +68,10 @@ def train(ctx: click.Context, train: TrainInput):
     metadata = train.plugin_metadata
     comet = config.get('comet')
 
-    if not config['verbose']:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+    if config['verbose']:
+        tf.autograph.set_verbosity(level=10, alsologtostdout=True)
+    else:
+        tf.autograph.set_verbosity(level=0, alsologtostdout=True)
     
     # set base directory for model artifacts 
     base_dir = train.artifact_path
@@ -396,17 +398,11 @@ def _get_paths_for_extra_files(artifact_path: Path):
     # append files to include in extras directory
     extras = [extras_path / f for f in checkpoints]
     extras.append(pipeline_path)
-    #extras.append(extras_path / 'graph.pbtxt')
 
     # append event checkpoints for tensorboard
     for f in os.listdir(extras_path):
         if f.startswith('events.out'):
             extras.append(extras_path / f)
-    
-
-    #for f in os.listdir(extras_path / 'eval_0'):
-    #    if f.startswith('events.out'):
-    #        extras.append(extras_path / 'eval_0' / f)
 
     extras.append(labels_path)
     return extras
