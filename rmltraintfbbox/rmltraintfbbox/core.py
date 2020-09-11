@@ -200,14 +200,18 @@ def train(ctx: click.Context, train: TrainInput):
 
             loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
             
-            if step % 100 == 0:
+            if step % config.get('log_train_every') == 0:
                 print(f'Training loss at step {step}: {loss}')
-                manager.save()
-
-            if step % 500 == 0:
-                metrics = evaluate(detection_model, configs, eval_input, global_step)
                 if comet:
-                    experiment.log_metrics(metrics, step=step)
+                    experiment.log_metric('loss', loss)
+                
+            if step % config.get('log_eval_every') == 0:
+                stack.enter_context(experiment.validate())
+                    manager.save()
+                    eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                    if comet:
+                        experiment.log_metrics(metrics, step=step)
+                stack.enter_context(experiment.train())
                 
 
         training_time = time.time() - start
@@ -224,7 +228,7 @@ def train(ctx: click.Context, train: TrainInput):
         click.echo("Evaluating model...")
         with ExitStack() as stack:
             if comet:
-                stack.enter_context(experiment.validate())
+                stack.enter_context(experiment.test())
             # path to label_map.pbtxt
             label_path = str(train.dataset.path / 'label_map.pbtxt')
             test_path = str(train.dataset.path / 'test')
