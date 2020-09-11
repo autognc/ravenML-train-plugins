@@ -73,8 +73,6 @@ def prepare_for_training(
 
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
-    # model_folder = models_folder / 'model'
-    # os.makedirs(models_folder)
     eval_folder = model_folder / 'eval'
     train_folder = model_folder / 'train'
     os.makedirs(model_folder)
@@ -124,8 +122,6 @@ def prepare_for_training(
         pipeline_contents = template.read()
     
     # insert training directory path into config file
-    # TODO: figure out what the hell is going on here
-    print(arch_path)
     if base_dir.name.endswith('/') or base_dir.name.endswith(r"\\"):
         pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path))
         pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path))

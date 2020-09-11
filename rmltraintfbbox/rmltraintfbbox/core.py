@@ -114,7 +114,6 @@ def train(ctx: click.Context, train: TrainInput):
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
-        experiment.set_name(comet)
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.set_git_metadata()
         experiment.set_os_packages()
@@ -219,7 +218,8 @@ def train(ctx: click.Context, train: TrainInput):
         click.echo(f'Training complete. Took {training_time} seconds.')
 
     # final metadata and return of TrainOutput object
-    metadata['date_completed_at'] = datetime.utcnow().isoformat() + "Z"
+    datetime_finished = datetime.utcnow().isoformat() + "Z"
+    metadata['date_completed_at'] = datetime_finished
 
     # get extra config files
     extra_files = _get_paths_for_extra_files(base_dir)
@@ -272,12 +272,15 @@ def train(ctx: click.Context, train: TrainInput):
     
     #zip files in export directory and add to extra_files
     #shutil.make_archive(os.path.join(saved_model_dir,'export'), 'zip', model_dir, saved_model_dir)
-    shutil.make_archive(os.path.join(saved_model_dir,'export'), 'zip', model_dir, 'export')
+    shutil.make_archive(os.path.join(saved_model_dir,'datetime_finished'), 'zip', model_dir, 'export')
     extra_files.append(os.path.join(saved_model_dir, 'export.zip'))
     saved_model_path = os.path.join(saved_model_dir, 'saved_model', 'saved_model.pb' )
     
     if comet:
+        experiment.set_name(datetime_finished)
+        experiment.log_parameter('training_title', comet)
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
+
 
     # export metadata locally
     with open(base_dir / 'metadata.json', 'w') as f:
