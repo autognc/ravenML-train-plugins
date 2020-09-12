@@ -69,7 +69,7 @@ def train(ctx: click.Context, train: TrainInput):
     metadata = train.plugin_metadata
     comet = config.get('comet')
 
-    if config['verbose']:
+    if config.get('verbose'):
         tf.autograph.set_verbosity(level=10, alsologtostdout=True)
     else:
         tf.autograph.set_verbosity(level=0, alsologtostdout=True)
@@ -213,7 +213,7 @@ def train(ctx: click.Context, train: TrainInput):
                 manager.save()
                 eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
                 if comet:
-                    experiment.log_metrics(metrics, step=step)
+                    experiment.log_metrics(eval_metrics, step=step)
                 stack.enter_context(experiment.train())
                 
 
