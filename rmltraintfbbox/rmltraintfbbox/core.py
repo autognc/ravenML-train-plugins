@@ -69,19 +69,12 @@ def train(ctx: click.Context, train: TrainInput):
     metadata = train.plugin_metadata
     comet = config.get('comet')
 
-<<<<<<< HEAD
     if config['verbose']:
         tf.autograph.set_verbosity(level=10, alsologtostdout=True)
     else:
         tf.autograph.set_verbosity(level=0, alsologtostdout=True)
     
     # set base directory for model artifacts 
-=======
-    if not config['verbose']:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-    # set base directory for model artifacts
->>>>>>> 948a9602368a56f1d79db32ca088bbcde92dd8be
     base_dir = train.artifact_path
 
     # load model choices from YAML
@@ -124,6 +117,7 @@ def train(ctx: click.Context, train: TrainInput):
     experiment = None
     if comet:
         experiment = Experiment(workspace='seeker-rd', project_name='bounding-box')
+        experiment.set_name(comet)
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.set_git_metadata()
         experiment.set_os_packages()
@@ -208,16 +202,10 @@ def train(ctx: click.Context, train: TrainInput):
         for step in range(1, num_train_steps+1):
 
             loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
-<<<<<<< HEAD
             
             if step % config.get('log_train_every') == 0:
-=======
-
-            if step % 100 == 0:
->>>>>>> 948a9602368a56f1d79db32ca088bbcde92dd8be
                 print(f'Training loss at step {step}: {loss}')
                 if comet:
-<<<<<<< HEAD
                     experiment.log_metric('loss', loss)
                 
             if step % config.get('log_eval_every') == 0:
@@ -228,9 +216,6 @@ def train(ctx: click.Context, train: TrainInput):
                         experiment.log_metrics(metrics, step=step)
                 stack.enter_context(experiment.train())
                 
-=======
-                    experiment.log_metrics(metrics, step=step)
->>>>>>> 948a9602368a56f1d79db32ca088bbcde92dd8be
 
         training_time = time.time() - start
 
@@ -293,21 +278,13 @@ def train(ctx: click.Context, train: TrainInput):
     saved_model_dir = os.path.join(model_dir, 'export')
     configproto = config_util.create_pipeline_proto_from_configs(configs)
     export_inference_graph('image_tensor', configproto, model_dir, saved_model_dir)
-<<<<<<< HEAD
     
     #zip files in export directory and add to extra_files
-    #shutil.make_archive(os.path.join(saved_model_dir,'export'), 'zip', model_dir, saved_model_dir)
-    shutil.make_archive(os.path.join(saved_model_dir,'datetime_finished'), 'zip', model_dir, 'export')
-=======
-
-    # zip files in export directory and add to extra_files
     shutil.make_archive(os.path.join(saved_model_dir, 'export'), 'zip', model_dir, 'export')
->>>>>>> 948a9602368a56f1d79db32ca088bbcde92dd8be
     extra_files.append(os.path.join(saved_model_dir, 'export.zip'))
     saved_model_path = os.path.join(saved_model_dir, 'saved_model', 'saved_model.pb')
 
     if comet:
-        experiment.set_name(datetime_finished)
         experiment.log_parameter('training_title', comet)
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
