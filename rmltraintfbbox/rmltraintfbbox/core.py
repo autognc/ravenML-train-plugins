@@ -210,10 +210,10 @@ def train(ctx: click.Context, train: TrainInput):
                 
             if step % config.get('log_eval_every') == 0:
                 stack.enter_context(experiment.validate())
-                    manager.save()
-                    eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
-                    if comet:
-                        experiment.log_metrics(metrics, step=step)
+                manager.save()
+                eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                if comet:
+                    experiment.log_metrics(metrics, step=step)
                 stack.enter_context(experiment.train())
                 
 
