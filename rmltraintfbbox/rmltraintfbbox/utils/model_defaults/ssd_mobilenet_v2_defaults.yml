@@ -5,4 +5,6 @@ Momentum:
     l2_regularizer_weight: 0.00004
     max_detections_per_class: 100
     batch_size: 512
-
+    learning_rate_base: 0.008
+    warmup_learning_rate: 0.0013
+    momentum_optimizer_value: 0.9
