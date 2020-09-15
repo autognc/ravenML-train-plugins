@@ -199,17 +199,19 @@ def train(ctx: click.Context, train: TrainInput):
 
         start = time.time()
         # main training loop
+        losses = []
         for step in range(1, num_train_steps+1):
 
-            loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
+            losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step))
             
             if step % config.get('log_train_every') == 0:
-                print(f'Training loss at step {step}: {loss}')
+                avg_loss = sum(losses) / len(losses)
+                print(f'Avg train loss at step {step}: {avg_loss}')
                 if comet:
-                    experiment.log_metric('loss', loss)
-                
+                    experiment.log_metric('avg_loss', avg_loss)
+                    losses = []
+    
             if step % config.get('log_eval_every') == 0:
-                if comet:
                 manager.save()
                 eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
                 if comet:
