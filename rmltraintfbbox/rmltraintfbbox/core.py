@@ -209,12 +209,13 @@ def train(ctx: click.Context, train: TrainInput):
                     experiment.log_metric('loss', loss)
                 
             if step % config.get('log_eval_every') == 0:
-                stack.enter_context(experiment.validate())
+                if comet:
                 manager.save()
                 eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
                 if comet:
+                    stack.enter_context(experiment.validate())
                     experiment.log_metrics(eval_metrics, step=step)
-                stack.enter_context(experiment.train())
+                    stack.enter_context(experiment.train())
                 
 
         training_time = time.time() - start
