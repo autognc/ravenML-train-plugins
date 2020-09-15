@@ -207,9 +207,10 @@ def train(ctx: click.Context, train: TrainInput):
             if step % config.get('log_train_every') == 0:
                 avg_loss = sum(losses) / len(losses)
                 print(f'Avg train loss at step {step}: {avg_loss}')
+                losses = []
                 if comet:
                     experiment.log_metric('avg_loss', avg_loss)
-                    losses = []
+                    
     
             if step % config.get('log_eval_every') == 0:
                 manager.save()
