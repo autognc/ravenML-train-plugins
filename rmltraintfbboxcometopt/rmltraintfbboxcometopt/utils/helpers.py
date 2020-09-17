@@ -12,20 +12,19 @@ import tarfile
 import yaml
 import click
 import urllib.request
-import shortuuid #TODO: add to requirements
 from colorama import init, Fore
 from pathlib import Path
 from ravenml.utils.local_cache import RMLCache
 from ravenml.utils.question import user_confirms, user_input, user_selects
 
 init()
-
+# default list of parameters we don't really want to mess with
 
     
-def prepare_one_train(base_dir, arch_path, pipeline_contents, config_update):
+def prepare_one_train(base_dir, arch_path, pipeline_contents, config_update, uuid):
 
     #create folder for new model each time
-    unique_name = 'model' + str(shortuuid.uuid())
+    unique_name = 'model' + str(uuid)
     model_folder = base_dir / 'models' / unique_name
     eval_folder = base_dir / 'eval'
     train_folder = base_dir / 'train'
@@ -36,32 +35,6 @@ def prepare_one_train(base_dir, arch_path, pipeline_contents, config_update):
     if os.path.exists(train_folder):
         shutil.rmtree(train_folder)
     os.makedirs(train_folder)
-
-    # copy model checkpoints to our train folder
-    #TODO: wtf is going on here? why are we copying this stuff from cur_dir?
-    cur_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    checkpoint_folder = arch_path / 'checkpoint'
-    checkpoint0_folder = cur_dir / 'checkpoint_0'
-    file1 = checkpoint_folder / 'ckpt-0.data-00000-of-00001'
-    file2 = checkpoint_folder / 'ckpt-0.index'
-    #file3 = checkpoint_folder / 'ckpt.meta'
-    #file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
-    #file5 = checkpoint0_folder / 'model.ckpt-0.index'
-    #file6 = checkpoint0_folder / 'model.ckpt-0.meta'
-    shutil.copy2(file1, train_folder)
-    shutil.copy2(file2, train_folder)
-    #shutil.copy2(file3, train_folder)
-    #shutil.copy2(file4, train_folder)
-    #shutil.copy2(file5, train_folder)
-    #shutil.copy2(file6, train_folder)
-
-    # load starting checkpoint template and insert training directory path
-    checkpoint_file = checkpoint0_folder / 'checkpoint'
-    with open(checkpoint_file) as cf:
-        checkpoint_contents = cf.read()
-    checkpoint_contents = checkpoint_contents.replace('<replace>', str(train_folder))
-    with open(train_folder / 'checkpoint', 'w') as new_cf:
-        new_cf.write(checkpoint_contents)
 
     #update config file with new hyperparameters
     for key, value in config_update.items():
@@ -100,13 +73,10 @@ def prepare_for_training(
     """
     # hyperparameter metadata dictionary
     hp_metadata = {}
-    
-    # create a data folder within our base_directory
-    os.makedirs(base_dir / 'data')
 
     # copy object-detection.pbtxt from dataset and move into training data folder
     pbtxt_file = data_path / 'label_map.pbtxt'
-    shutil.copy(pbtxt_file, base_dir / 'data')
+    shutil.copy(pbtxt_file, base_dir)
 
     # calculate number of classes from pbtxt file
     with open(pbtxt_file, "r") as f:
@@ -132,15 +102,25 @@ def prepare_for_training(
             defaults = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
-
+    
+    comet_defaults ={}
+    comet_path = Path(os.path.dirname(__file__)) / 'comet_configs' / f'{model_type}_defaults.yml'
+    with open(comet_path, 'r') as stream:
+        try:
+            comet_defaults = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+    print(comet_defaults)
     optimizer_name = config['optimizer'] if config.get('optimizer') else user_selects('Choose optimizer', defaults.keys())
     hp_metadata['optimizer'] = optimizer_name
     
     ### PIPELINE CONFIG CREATION ###
     # grab default config for the chosen optimizer
     default_config = {}
+    comet_config = {}
     try:
         default_config = defaults[optimizer_name]
+        comet_config = comet_defaults[optimizer_name]
     except KeyError as e:
         hint = 'optimizer name, optimizer not supported for this model architecture.'
         raise click.exception.BadParameter(optimizer_name, param=optimizer_name, param_hint=hint)
@@ -165,19 +145,17 @@ def prepare_for_training(
     with open(pipeline_path) as template:
         pipeline_contents = template.read()
     
-    # insert training directory path into config file
-    # TODO: figure out what the hell is going on here
-    train_dir = base_dir / 'train'
+    
     if base_dir.name.endswith('/') or base_dir.name.endswith(r"\\"):
-        pipeline_contents = pipeline_contents.replace('<replace_path>models/model/train/', str(train_dir))
-        pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir))
+        pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path))
+        pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path))
     else:
         if os.name == 'nt':
-            pipeline_contents = pipeline_contents.replace('<replace_path>models/model/train/', str(train_dir) + r"\\")
-            pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + r"\\")
+            pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path) + r"\\")
+            pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path) + r"\\")
         else:
-            pipeline_contents = pipeline_contents.replace('<replace_path>models/model/train/', str(train_dir) + '/')
-            pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + '/')
+            pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path) + '/')
+            pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path) + '/')
 
 
     # place TF record files into training directory
@@ -187,25 +165,23 @@ def prepare_for_training(
     for record_file in os.listdir(records_path):
         if record_file.startswith('train.record-'):
             num_train_records += 1
-            file_path = records_path / record_file
-            shutil.copy(file_path, base_dir / 'data')
 
         if record_file.startswith('test.record-'):
             num_test_records += 1
-            file_path = records_path / record_file
-            shutil.copy(file_path, base_dir / 'data')
 
     # convert int to left zero padded string of length 5
     user_config['num_train_records'] = str(num_train_records).zfill(5)
     user_config['num_test_records'] = str(num_test_records).zfill(5)
-            
+    
+    comet_params = {}
     # insert rest of config into config file
     for key, value in user_config.items():
         formatted = '<replace_' + key + '>'
         print(formatted)
-        pipeline_contents = pipeline_contents.replace(formatted, str(value))
-
-    # insert num clases into config file
+        if key not in comet_config.keys():
+            pipeline_contents = pipeline_contents.replace(formatted, str(value))
+    
+    # insert num classes into config file
     pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
 
     # insert num eval examples into config file
@@ -213,8 +189,9 @@ def prepare_for_training(
 
     # update metadata
     metadata['hyperparameters'] = hp_metadata
-
-    return pipeline_contents
+    print(f'pipeline_contents: {pipeline_contents}')
+    
+    return pipeline_contents, comet_config
 
 
 def download_model_arch(model_name: str, bbox_cache: RMLCache):
