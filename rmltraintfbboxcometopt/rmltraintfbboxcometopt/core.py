@@ -136,9 +136,7 @@ def train(ctx: click.Context, train: TrainInput):
     }
     
     
-    # maybe should make this a required field. maybe not a good idea to open source an API key
-    api_key = config.get('api_key', 'mZEpHIIyCDmQWeufDuOiRhOeU' )
-    opt = Optimizer(optconfig, project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment', api_key = api_key)
+    opt = Optimizer(optconfig, workspace='seeker-rd', project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment')
     def _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents):
         
         config_update = {}
@@ -168,7 +166,7 @@ def train(ctx: click.Context, train: TrainInput):
 
         detection_model = model_builder.build(model_config=model_config, is_training=True)
         
-        #create tf.data.Dataset()
+        # create tf.data.Dataset()
         train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
         eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
 
