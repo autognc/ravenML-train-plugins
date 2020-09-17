@@ -12,8 +12,8 @@ from setuptools import setup, find_packages
 # https://stackoverflow.com/questions/10924885/is-it-possible-to-include-subdirectories-using-dist-utils-setup-py-as-part-of
 
 # determine GPU or CPU install via env variable
-gpu = os.getenv('RML_GPU')
-tensorflow_pkg = 'tensorflow==2.3.0' if not gpu else 'tensorflow-gpu==2.3.0'
+
+tensorflow_pkg = 'tensorflow==2.3.0'
 
 setup(
     name='rmltraintfbboxcometopt',
@@ -38,7 +38,7 @@ setup(
         'halo==0.0.29',
         'urllib3==1.24.3',
         tensorflow_pkg,
-	    'shortuuid'
+        'shortuuid'
     ],
     entry_points='''
         [ravenml.plugins.train]
