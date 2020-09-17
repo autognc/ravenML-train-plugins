@@ -141,7 +141,10 @@ def train(ctx: click.Context, train: TrainInput):
         
         config_update = {}
         for key in optconfig['parameters'].keys():
-            config_update[key] = experiment.get_parameter(key)
+            if key.contains('schedule_lr'):
+                config_update[key] = experiment.get_parameter('initial_learning_rate') / experiment.get_parameter(key)
+            else:
+                config_update[key] = experiment.get_parameter(key)
         print('config_update:', config_update)
 
         num_train_steps = int(metadata['hyperparameters']['train_steps'])
