@@ -1,0 +1,13 @@
+Momentum:
+    learning_rate_base:
+        type: float
+        min: 0.005
+        max: 0.01
+    momentum_optimizer_value:
+        type: float
+        min: 0.1
+        max: 0.9
+    batch_size : 
+        type: integer
+        min: 1
+        max: 20

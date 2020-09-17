@@ -1,8 +1,7 @@
 Adam:
     num_classes: 1
     train_steps: 140000
+    initial_learning_rate : 0.001
     epsilon: 0.0000001
     batch_size : 10
-    # these two set by comet optimizer
-    # max_box_predictions: 100
-    # initial_learning_rate : 0.001
+    max_box_predictions: 100

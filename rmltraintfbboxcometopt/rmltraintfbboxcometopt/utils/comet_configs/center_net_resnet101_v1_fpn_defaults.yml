@@ -1,0 +1,17 @@
+Adam:
+    initial_learning_rate:
+        type: float
+        min: 0.005
+        max: 0.01
+    epsilon:
+        type: float
+        min: 0.00000001
+        max: 0.000001
+    batch_size : 
+        type: integer
+        min: 1
+        max: 20
+    max_box_predictions:
+        type: integer
+        min: 5
+        max: 150
