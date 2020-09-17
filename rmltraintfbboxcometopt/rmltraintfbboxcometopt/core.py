@@ -10,7 +10,6 @@ from __future__ import print_function
 
 from comet_ml import Optimizer, Experiment
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'#remove this!
 import click 
 import io
 import sys
@@ -24,6 +23,7 @@ import time
 import tensorflow as tf
 import random
 import shutil
+import shortuuid
 import rmltraintfbboxcometopt.validation.utils as utils
 from contextlib import ExitStack
 from pathlib import Path
@@ -70,8 +70,10 @@ def train(ctx: click.Context, train: TrainInput):
     metadata = train.plugin_metadata
     comet = config.get('comet')
 
-    if not config['verbose']:
-        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+    if config.get('verbose'):
+        tf.autograph.set_verbosity(level=10, alsologtostdout=True)
+    else:
+        tf.autograph.set_verbosity(level=0, alsologtostdout=True)
     # set base directory for model artifacts 
     base_dir = train.artifact_path
  
@@ -102,7 +104,7 @@ def train(ctx: click.Context, train: TrainInput):
     arch_path = download_model_arch(model_url, train.plugin_cache)
 
     # prepare directory for training/prompt for hyperparams
-    pipeline_contents = prepare_for_training(train.plugin_cache, train.artifact_path, train.dataset.path, 
+    pipeline_contents, comet_settings = prepare_for_training(train.plugin_cache, train.artifact_path, train.dataset.path, 
                                             arch_path, model_type, metadata, train.plugin_config)
 
     
@@ -110,58 +112,59 @@ def train(ctx: click.Context, train: TrainInput):
     train_dir = os.path.join(model_dir, 'train')
     eval_dir = os.path.join(model_dir, 'eval')
     pipeline_config_path = os.path.join(model_dir, 'pipeline.config')
-
-
+    
+    # make sure test path passed actually has images and metadata
+    if config.get('test_path'):
+        if len(glob.glob(os.path.join(os.path.expanduser(config.get('test_path')), 'meta*'))) == 0 or \
+            len(glob.glob(os.path.join(os.path.expanduser(config.get('test_path')), 'image*')))==0:
+            raise ValueError("test_path does not contain correctly formatted image and metadata files")
+            
+       
     #TODO: make config into a file
     optconfig = {
     # We pick the Bayes algorithm:
     "algorithm": "bayes",
     # Declare your hyperparameters in the Vizier-inspired format: TODO: which hyperparams do we modify for new architectures?
-    "parameters": {
-        "initial_learning_rate": {"type": "float", "min": 0.0001, "max": 0.001},
-        "max_box_predictions": {"type": "integer", "min": 75, "max": 125},
-        "min_box_overlap_iou": {"type": "float", "min": 0.5, "max": 0.8}
-        },
+    "parameters": comet_settings,
     # Declare what we will be optimizing, and how:
     "spec": {
         "metric": "mAP",
         "objective": "maximize",
-        "maxCombo": 5
         },
     "name": "Test-1",
     "trials": 1
     }
-
-
-    opt = Optimizer(optconfig, project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment', api_key='mZEpHIIyCDmQWeufDuOiRhOeU')
+    
+    
+    # maybe should make this a required field. maybe not a good idea to open source an API key
+    api_key = config.get('api_key', 'mZEpHIIyCDmQWeufDuOiRhOeU' )
+    opt = Optimizer(optconfig, project_name='bbox-hyperparameter', verbose=1, experiment_class='Experiment', api_key = api_key)
     def _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents):
-        
         
         config_update = {}
         for key in optconfig['parameters'].keys():
             config_update[key] = experiment.get_parameter(key)
-
+        print('config_update:', config_update)
 
         num_train_steps = int(metadata['hyperparameters']['train_steps'])
-        
         experiment.log_parameters(metadata['hyperparameters'])
+        experiment.log_parameters(config_update)
+        
         experiment.set_os_packages()
         experiment.set_pip_packages()
-        #experiment.log_asset(pipeline_config_path)
         
-        model_dir = prepare_one_train(base_dir, arch_path, pipeline_contents, config_update)
-        
+        uuid = str(shortuuid.uuid())
+        model_dir = prepare_one_train(base_dir, arch_path, pipeline_contents, config_update, uuid)
+        experiment.set_name(uuid)
         pipeline_config_path = os.path.join(model_dir, 'pipeline.config')
-        #return 0.5, ''
 
-        
         configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
         model_config = configs['model']
         train_config = configs['train_config']
         train_input_config = configs['train_input_config']
         eval_input_config = configs['eval_input_config']
         eval_config = configs['eval_config']
-
+        
 
         detection_model = model_builder.build(model_config=model_config, is_training=True)
         
@@ -183,14 +186,14 @@ def train(ctx: click.Context, train: TrainInput):
         else:
           learning_rate_fn = lambda: learning_rate
         print(train_config)
-        """
+
         #restore from checkpoint
         load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint, 
                                             train_config.fine_tune_checkpoint_type,
                                             train_config.fine_tune_checkpoint_version,
                                             train_input, 
                                             train_config.unpad_groundtruth_tensors)
-        """
+
         @tf.function
         def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step):
 
@@ -229,19 +232,27 @@ def train(ctx: click.Context, train: TrainInput):
             click.echo('Training model...')
 
             start = time.time()
-            #main training loop
+            # main training loop
+            losses = []
             for step in range(1, num_train_steps+1):
 
-                loss = train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step)
+                losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step))
                 
-                if step % 100 == 0:
-                    print(f'Training loss at step {step}: {loss}')
-                    manager.save()
-
-                if step % 500 == 0:
-                    metrics = evaluate(detection_model, configs, eval_input, global_step)
+                if step % config.get('log_train_every') == 0:
+                    avg_loss = sum(losses) / len(losses)
+                    print(f'Avg train loss at step {step}: {avg_loss}')
+                    losses = []
                     if comet:
-                        experiment.log_metrics(metrics, step=step)
+                        experiment.log_metric('avg_loss', avg_loss)
+                        
+        
+                if step % config.get('log_eval_every') == 0:
+                    manager.save()
+                    eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                    if comet:
+                        stack.enter_context(experiment.validate())
+                        experiment.log_metrics(eval_metrics, step=step)
+                        stack.enter_context(experiment.train())
                     
 
             training_time = time.time() - start
@@ -257,11 +268,16 @@ def train(ctx: click.Context, train: TrainInput):
             stack.enter_context(experiment.validate())
             # path to label_map.pbtxt
             label_path = str(train.dataset.path / 'label_map.pbtxt')
-            test_path = str(train.dataset.path / 'test')
-            output_path = str(base_dir / 'validation')
-            
+
+            if config.get('test_path'):
+                test_path = os.path.expanduser(config.get('test_path'))
+            else:
+                test_path = str(train.dataset.path / 'test')
+
+            output_path = str(base_dir / 'validation'/ uuid )
+
             try:
-                os.mkdir(output_path)
+                os.makedirs(output_path)
             except Exception:
                 pass
                 
@@ -335,6 +351,7 @@ def train(ctx: click.Context, train: TrainInput):
         
         count += 1
         experiment.log_metric("mAP", mAP)
+        experiment.end()
 
     #experiment.log_asset_data(train.metadata, file_name="metadata.json")
 
