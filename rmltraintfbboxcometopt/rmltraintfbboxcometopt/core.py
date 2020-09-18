@@ -248,7 +248,7 @@ def train(ctx: click.Context, train: TrainInput):
                     print(f'Avg train loss at step {step}: {avg_loss}')
                     losses = []
                     if comet:
-                        experiment.log_metric('avg_loss', avg_loss)
+                        experiment.log_metric('avg_loss', avg_loss, step=step)
                         
         
                 if step % config.get('log_eval_every') == 0:
