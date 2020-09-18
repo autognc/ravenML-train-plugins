@@ -352,6 +352,7 @@ def train(ctx: click.Context, train: TrainInput):
         
         # check if this for highest mAP model
         if mAP > max_mAP:
+            max_mAP = mAP
             best_train_output = extras_and_model
             for fp in extras_and_model.extra_files:
                     upload_file_to_s3(f'extras/{uuid}', fp)
