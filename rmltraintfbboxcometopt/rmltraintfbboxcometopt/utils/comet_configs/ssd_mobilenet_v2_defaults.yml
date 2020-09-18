@@ -1,3 +1,49 @@
+Adam:
+    dropout_keep_probability: 
+        type: float
+        min: 0.4
+        max: 0.7
+    max_detections_per_class:
+        type: integer
+        min: 5
+        max: 100
+    l2_regularizer_weight: 
+        type: float
+        scalingType: loguniform
+        min:  0.000004
+        max: 0.004
+    initial_learning_rate:
+        type: float
+        scalingType: loguniform
+        min: 0.0001
+        max: 0.01
+    first_schedule_steps: 
+        type: integer
+        min: 12000
+        max: 24000
+    first_schedule_lr:
+        type: float
+        scalingType: loguniform
+        min: 5
+        max: 120
+    second_schedule_steps: 
+        type: integer
+        min: 25000
+        max: 35000
+    second_schedule_lr: 
+        type: float
+        scalingType: loguniform
+        min: 5
+        max: 120
+    epsilon:
+        type: float
+        scalingType: loguniform
+        min: 0.0000001
+        max: 0.00001
+    batch_size : 
+        type: integer
+        min: 1
+        max: 20
 Momentum:
     dropout_keep_probability: 
         type: float
@@ -27,44 +73,4 @@ Momentum:
         type: float
         min: 0.1
         max: 0.9
-Adam:
-    dropout_keep_probability: 
-        type: float
-        min: 0.2
-        max: 0.8
-    max_detections_per_class:
-        type: integer
-        min: 1
-        max: 100
-    l2_regularizer_weight: 
-        type: float
-        min:  0.000004
-        max: 0.004
-    initial_learning_rate:
-        type: float
-        min: 0.005
-        max: 0.01
-    first_schedule_steps: 
-        type: integer
-        min: 12000
-        max: 24000
-    first_schedule_lr:
-        type: float
-        min: 0.00005
-        max: 0.005
-    second_schedule_steps: 
-        type: integer
-        min: 25000
-        max: 35000
-    second_schedule_lr: 
-        type: float
-        min: 0.000001
-        max: 0.0005
-    epsilon:
-        type: float
-        min: 0.00000001
-        max: 0.000001
-    batch_size : 
-        type: integer
-        min: 1
-        max: 20
+

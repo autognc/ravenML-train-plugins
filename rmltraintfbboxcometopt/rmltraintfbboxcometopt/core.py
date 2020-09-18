@@ -31,6 +31,7 @@ from datetime import datetime
 from ravenml.train.options import pass_train
 from ravenml.train.interfaces import TrainInput, TrainOutput
 from ravenml.utils.question import cli_spinner, user_selects, user_input
+from ravenml.utils.aws import upload_file_to_s3, upload_dict_to_s3_as_json
 from rmltraintfbboxcometopt.utils.helpers import prepare_for_training, download_model_arch, prepare_one_train
 from rmltraintfbboxcometopt.validation.model import BoundingBoxModel
 from rmltraintfbboxcometopt.validation.stats import BoundingBoxEvaluator
@@ -140,13 +141,16 @@ def train(ctx: click.Context, train: TrainInput):
     def _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents):
         
         config_update = {}
+        lr = None
         for key in optconfig['parameters'].keys():
-            if key.contains('schedule_lr'):
-                config_update[key] = experiment.get_parameter('initial_learning_rate') / experiment.get_parameter(key)
+            if 'schedule_lr' in key:
+                if lr:
+                    config_update[key] = lr / experiment.get_parameter(key)
+                else:
+                    lr = config_update[key] = experiment.get_parameter('initial_learning_rate') / experiment.get_parameter(key)
             else:
                 config_update[key] = experiment.get_parameter(key)
         print('config_update:', config_update)
-
         num_train_steps = int(metadata['hyperparameters']['train_steps'])
         experiment.log_parameters(metadata['hyperparameters'])
         experiment.log_parameters(config_update)
@@ -333,23 +337,25 @@ def train(ctx: click.Context, train: TrainInput):
         # This should clear the old model from memory, although this might not be necessary
         tf.keras.backend.clear_session()
         
-        return mAP, TrainOutput(Path(saved_model_path), extra_files)
+        return mAP, TrainOutput(Path(saved_model_path), extra_files), uuid
     
     count = 0
     best_train_output = None
-    max_mAP = -1
+    max_mAP = -100000
     
     for experiment in opt.get_experiments():
         #experiment.add_tag("smaller_model_three_hyperparameters_opt")
         # Call the function that wraps the Neural Network code to start the experiment
-        mAP, extras_and_model = _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents)
+        mAP, extras_and_model, uuid = _train(experiment, optconfig, config, arch_path, metadata, pipeline_contents)
         
         print("experiment: ", count, " map: ", mAP)
         
         # check if this for highest mAP model
         if mAP > max_mAP:
             best_train_output = extras_and_model
-        
+            for fp in extras_and_model.extra_files:
+                    upload_file_to_s3(f'extras/{uuid}', fp)
+            upload_dict_to_s3_as_json(f'extras/{uuid}/metadata', metadata)
         count += 1
         experiment.log_metric("mAP", mAP)
         experiment.end()
@@ -449,7 +455,7 @@ def _get_paths_for_extra_files(artifact_path: Path, model_dir: Path):
     files = os.listdir(extras_path)
     
     # path to label map
-    labels_path = artifact_path / 'data' / 'label_map.pbtxt'
+    labels_path = artifact_path / 'label_map.pbtxt'
 
     checkpoints = [f for f in files if checkpoint_regex.match(f)]
 
