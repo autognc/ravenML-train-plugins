@@ -24,6 +24,7 @@ import tensorflow as tf
 import random
 import shutil
 import shortuuid
+import psutil
 import rmltraintfbboxcometopt.validation.utils as utils
 from contextlib import ExitStack
 from pathlib import Path
@@ -235,7 +236,8 @@ def train(ctx: click.Context, train: TrainInput):
 
             stack.enter_context(experiment.train())
             click.echo('Training model...')
-
+            if comet:
+                experiment.log_metric('memory usage(GB)', psutil.virtual_memory().used/1e9, step=1)
             start = time.time()
             # main training loop
             losses = []
@@ -249,8 +251,8 @@ def train(ctx: click.Context, train: TrainInput):
                     losses = []
                     if comet:
                         experiment.log_metric('avg_loss', avg_loss, step=step)
-                        
-        
+                        experiment.log_metric('memory usage(GB)', psutil.virtual_memory().used/1e9, step=step)
+                
                 if step % config.get('log_eval_every') == 0:
                     manager.save()
                     eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
@@ -259,7 +261,7 @@ def train(ctx: click.Context, train: TrainInput):
                         experiment.log_metrics(eval_metrics, step=step)
                         stack.enter_context(experiment.train())
                     
-
+            
             training_time = time.time() - start
             
             click.echo(f'Training complete. Took {training_time} seconds.')
