@@ -223,8 +223,13 @@ class KeypointsModel:
         if train:
             dataset = dataset.shuffle(self.hp["shuffle_buffer_size"])
 
-        dataset = dataset.map(lambda example: tf.io.parse_single_example(example, features), num_parallel_calls=16)
-        dataset = dataset.filter(lambda parsed: len(parsed["image/object/bbox/xmin"].values) > 0)
+        dataset = dataset.map(
+            lambda example: tf.io.parse_single_example(example, features),
+            num_parallel_calls=16,
+        )
+        dataset = dataset.filter(
+            lambda parsed: len(parsed["image/object/bbox/xmin"].values) > 0
+        )
         return dataset.map(_parse_function, num_parallel_calls=16)
 
     def train(self, logdir, experiment=None):
