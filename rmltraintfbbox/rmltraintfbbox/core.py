@@ -291,6 +291,7 @@ def train(ctx: click.Context, train: TrainInput):
     if comet:
         experiment.log_parameter('training_title', comet)
         experiment.log_asset_data(train.metadata, file_name="metadata.json")
+        experiment.log_parameter('dataset_name', train.config['dataset'])
 
 
     # export metadata locally
