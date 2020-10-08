@@ -48,9 +48,6 @@ def prepare_for_training(
     """
     # hyperparameter metadata dictionary
     hp_metadata = {}
-    
-    # create a data folder within our base_directory
-    #os.makedirs(base_dir / 'data')
 
     # copy object-detection.pbtxt from dataset and move into training data folder
     pbtxt_file = data_path / 'label_map.pbtxt'
