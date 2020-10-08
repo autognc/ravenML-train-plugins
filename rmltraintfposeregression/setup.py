@@ -10,7 +10,7 @@ setup(
         'pillow==6.0.0',
         'matplotlib==3.1.0',
         'tqdm==4.32.2',
-        'tensorflow==2.1.0'
+        'tensorflow==2.1.2'
     ],
     entry_points='''
         [ravenml.plugins.train]
