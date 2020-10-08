@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import os
 import json
 import pickle
-from collections import defaultdict
 from object_detection.metrics.coco_evaluation import CocoDetectionEvaluator
 from object_detection.core.standard_fields import InputDataFields, DetectionResultFields
 from object_detection.utils.object_detection_evaluation import ObjectDetectionEvaluator
@@ -54,12 +53,11 @@ class BoundingBoxEvaluator:
         self.stats = {}
         return self
 
-    def add_single_result(self, output, true_shape, inference_time, bbox, centroid, image_size=None, distance=None):
+    def add_single_result(self, output, inference_time, bbox, centroid, image_size=None, distance=None):
         """
         Add single inference result to the evaluation.
-        :param output: the parsed output from a detection model inference.
-        :param true_shape: the shape of the original image passed into the detection model
-        :param inference_time: the inference time from a detection model inference.
+        :param output: the parsed output from a BoundingBoxModel inference.
+        :param inference_time: the inference time from a BoundingBoxModel inference.
         :param bbox: a dict {classname: bbox} where bbox has keys keys 'xmin', 'xmax', 'ymin',
             and 'ymax' in non-normalized (pixel) coordinates.
         :param centroid: a dict {classname: centroid} where classname is a tuple (y, x) in
@@ -68,7 +66,6 @@ class BoundingBoxEvaluator:
         :param distance: a dict {classname: distance} where distance is the distance from the object
             to the camera in `distance_unit`.
         """
-        output = self.parse_inference_output(output, true_shape)
         if image_size:
             if self.fov:
                 self.sizes.append(image_size)
@@ -91,38 +88,6 @@ class BoundingBoxEvaluator:
         self.centroids.append(centroid)
         self.count += 1
 
-    def parse_inference_output(self, output, image_size):
-        """
-        Parses the raw output of the object detection model into a more sensible format.
-        :param category_index: a category index created with `get_category_index`
-        :param output: a dict obtained by running the model and fetching, at the very least, all of the output tensors
-        provided by `get_input_and_output_tensors`.
-        :return: a dictionary of the form {classname: [(confidence, bbox)]} where bbox is a
-        dict with keys xmin, xmax, ymin, ymax (non-normalized).
-        """
-        # unpack the outputs, which come with a batch dimension
-        num_detections = int(output['num_detections'][0])
-        detection_classes = output['detection_classes'][0].numpy() + 1
-        detection_boxes = output['detection_boxes'][0].numpy()
-        detection_scores = output['detection_scores'][0].numpy()
-        image_size = image_size.numpy()
-
-        detections = defaultdict(list)
-        for i in range(num_detections):
-            score = detection_scores[i]
-            box = detection_boxes[i]
-            class_id = int(detection_classes[i])
-            class_name = self.category_index[class_id]['name']
-            bbox = {
-                'xmin': box[1] * image_size[0][1],
-                'xmax': box[3] * image_size[0][1],
-                'ymin': box[0] * image_size[0][0],
-                'ymax': box[2] * image_size[0][0]
-            }
-            detections[class_name].append((score, bbox))
-
-        return dict(detections)
-
     def calculate_coco_statistics(self, save=True):
         # create coco evaluator
         coco_evaluator = CocoDetectionEvaluator(list(self.category_index.values()))
@@ -138,16 +103,14 @@ class BoundingBoxEvaluator:
         for i, (output_dict, bbox_dict) in enumerate(zip(self.outputs, self.bboxes)):
             for class_id, cls in self.category_index.items():
                 class_name = cls['name']
-                #should this be .get?
-                outputs = output_dict.get(class_name)  # list of (score, bbox) for this class
+                outputs = output_dict[class_name]  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)  # bbox for this class
 
                 # add ground truth for this class and this image to the evaluator
                 if bbox:
                     boxes = np.array([[bbox['ymin'], bbox['xmin'], bbox['ymax'], bbox['xmax']]], dtype=np.float32)
                 else:
-                    #TODO: make sure eval is correct on occluded images
-                    boxes = np.empty([1, 4], dtype=np.float32)
+                    boxes = np.empty([0, 4], dtype=np.float32)
                 groundtruth_dict = {
                     InputDataFields.groundtruth_boxes: boxes,
                     InputDataFields.groundtruth_classes: np.full(1, class_id, dtype=np.float32)
@@ -156,15 +119,14 @@ class BoundingBoxEvaluator:
                 # od_evaluator.add_single_ground_truth_image_info(i, groundtruth_dict)
 
                 # add detections for this class and this image to the evaluator
-                if outputs:
-                    scores, boxes = zip(*outputs)
-                    boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in boxes]
-                    detections_dict = {
-                        DetectionResultFields.detection_boxes: np.array(boxes, dtype=np.float32),
-                        DetectionResultFields.detection_scores: np.array(scores, dtype=np.float32),
-                        DetectionResultFields.detection_classes: np.full(len(boxes), class_id, dtype=np.float32)
-                    }
-                    coco_evaluator.add_single_detected_image_info(i, detections_dict)
+                scores, boxes = zip(*outputs)
+                boxes = [[box['ymin'], box['xmin'], box['ymax'], box['xmax']] for box in boxes]
+                detections_dict = {
+                    DetectionResultFields.detection_boxes: np.array(boxes, dtype=np.float32),
+                    DetectionResultFields.detection_scores: np.array(scores, dtype=np.float32),
+                    DetectionResultFields.detection_classes: np.full(len(boxes), class_id, dtype=np.float32)
+                }
+                coco_evaluator.add_single_detected_image_info(i, detections_dict)
                 # od_evaluator.add_single_detected_image_info(i, detections_dict)
 
         result = coco_evaluator.evaluate()
@@ -195,7 +157,7 @@ class BoundingBoxEvaluator:
         } for cls in self.classes}
         for output_dict, bbox_dict in zip(self.outputs, self.bboxes):
             for class_name in self.classes:
-                outputs = output_dict.get(class_name) # list of (score, bbox) for this class
+                outputs = output_dict[class_name]  # list of (score, bbox) for this class
                 bbox = bbox_dict.get(class_name)
 
                 if outputs and outputs[0][0] >= confidence_threshold:
@@ -437,7 +399,7 @@ class BoundingBoxEvaluator:
 
     @classmethod
     def _get_iou(cls, a, b):
-        intersection = { 
+        intersection = {
             'xmin': max(a['xmin'], b['xmin']),
             'ymin': max(a['ymin'], b['ymin']),
             'xmax': min(a['xmax'], b['xmax']),

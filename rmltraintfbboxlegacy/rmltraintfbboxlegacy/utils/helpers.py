@@ -48,10 +48,13 @@ def prepare_for_training(
     """
     # hyperparameter metadata dictionary
     hp_metadata = {}
+    
+    # create a data folder within our base_directory
+    os.makedirs(base_dir / 'data')
 
     # copy object-detection.pbtxt from dataset and move into training data folder
     pbtxt_file = data_path / 'label_map.pbtxt'
-    shutil.copy(pbtxt_file, base_dir)
+    shutil.copy(pbtxt_file, base_dir / 'data')
 
     # calculate number of classes from pbtxt file
     with open(pbtxt_file, "r") as f:
@@ -70,6 +73,8 @@ def prepare_for_training(
 
     # create models, model, eval, and train folders
     model_folder = base_dir / 'models' / 'model'
+    # model_folder = models_folder / 'model'
+    # os.makedirs(models_folder)
     eval_folder = model_folder / 'eval'
     train_folder = model_folder / 'train'
     os.makedirs(model_folder)
@@ -119,16 +124,14 @@ def prepare_for_training(
         pipeline_contents = template.read()
     
     # insert training directory path into config file
+    # TODO: figure out what the hell is going on here
     if base_dir.name.endswith('/') or base_dir.name.endswith(r"\\"):
-        pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path))
-        pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path))
+        pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir))
     else:
         if os.name == 'nt':
-            pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path) + r"\\")
-            pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path) + r"\\")
+            pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + r"\\")
         else:
-            pipeline_contents = pipeline_contents.replace('<replace_data_path>', str(data_path) + '/')
-            pipeline_contents = pipeline_contents.replace('<replace_arch_path>', str(arch_path) + '/')
+            pipeline_contents = pipeline_contents.replace('<replace_path>', str(base_dir) + '/')
 
     # place TF record files into training directory
     num_train_records = 0
@@ -136,10 +139,14 @@ def prepare_for_training(
     records_path = data_path / 'splits/complete/train'
     for record_file in os.listdir(records_path):
         if record_file.startswith('train.record-'):
-           num_train_records += 1
+            num_train_records += 1
+            file_path = records_path / record_file
+            shutil.copy(file_path, base_dir / 'data')
+
         if record_file.startswith('test.record-'):
             num_test_records += 1
-
+            file_path = records_path / record_file
+            shutil.copy(file_path, base_dir / 'data')
 
     # convert int to left zero padded string of length 5
     user_config['num_train_records'] = str(num_train_records).zfill(5)
@@ -150,16 +157,40 @@ def prepare_for_training(
         formatted = '<replace_' + key + '>'
         pipeline_contents = pipeline_contents.replace(formatted, str(value))
 
-    # insert num classes into config file
+    # insert num clases into config file
     pipeline_contents = pipeline_contents.replace('<replace_num_classes>', str(num_classes))
 
     # insert num eval examples into config file
     pipeline_contents = pipeline_contents.replace('<replace_num_eval_examples>', str(num_eval_examples))
 
-    # output final configuration file for training
+    # output final configuation file for training
     with open(model_folder / 'pipeline.config', 'w') as file:
         file.write(pipeline_contents)
-
+    
+    # copy model checkpoints to our train folder
+    checkpoint_folder = arch_path
+    checkpoint0_folder = cur_dir / 'checkpoint_0'
+    file1 = checkpoint_folder / 'model.ckpt.data-00000-of-00001'
+    file2 = checkpoint_folder / 'model.ckpt.index'
+    file3 = checkpoint_folder / 'model.ckpt.meta'
+    file4 = checkpoint0_folder / 'model.ckpt-0.data-00000-of-00001'
+    file5 = checkpoint0_folder / 'model.ckpt-0.index'
+    file6 = checkpoint0_folder / 'model.ckpt-0.meta'
+    shutil.copy2(file1, train_folder)
+    shutil.copy2(file2, train_folder)
+    shutil.copy2(file3, train_folder)
+    shutil.copy2(file4, train_folder)
+    shutil.copy2(file5, train_folder)
+    shutil.copy2(file6, train_folder)
+    
+    # load starting checkpoint template and insert training directory path
+    checkpoint_file = checkpoint0_folder / 'checkpoint'
+    with open(checkpoint_file) as cf:
+        checkpoint_contents = cf.read()
+    checkpoint_contents = checkpoint_contents.replace('<replace>', str(train_folder))
+    with open(train_folder / 'checkpoint', 'w') as new_cf:
+        new_cf.write(checkpoint_contents)
+    
     # update metadata and return success
     metadata['hyperparameters'] = hp_metadata
     return True
@@ -174,7 +205,7 @@ def download_model_arch(model_name: str, bbox_cache: RMLCache):
     Returns:
         Path: path to model architecture
     """
-    url = 'http://download.tensorflow.org/models/object_detection/tf2/20200711/%s.tar.gz' %(model_name)
+    url = 'http://download.tensorflow.org/models/object_detection/%s.tar.gz' %(model_name)
     # make paths within bbox cache 
     bbox_cache.ensure_subpath_exists('bbox_model_archs')
     archs_path = bbox_cache.path / 'bbox_model_archs'
