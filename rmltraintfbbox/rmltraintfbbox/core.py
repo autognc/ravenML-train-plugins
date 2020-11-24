@@ -100,7 +100,8 @@ def train(ctx: click.Context, train: TrainInput):
     model_type = model['type']
     model_url = model['url']
     metadata['architecture'] = model_name
-
+    
+    
     # download model arch
     arch_path = download_model_arch(model_url, train.plugin_cache)
 
@@ -126,42 +127,45 @@ def train(ctx: click.Context, train: TrainInput):
 
     # get number of training steps
     num_train_steps = int(metadata['hyperparameters']['train_steps'])
-
+    strategy = tf.distribute.MirroredStrategy()
+    num_replicas = strategy.num_replicas_in_sync
+    print(f'number of GPUS: {num_replicas}')
     configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
     model_config = configs['model']
     train_config = configs['train_config']
     train_input_config = configs['train_input_config']
     eval_input_config = configs['eval_input_config']
     eval_config = configs['eval_config']
-
-    detection_model = model_builder.build(model_config=model_config, is_training=True)
-
+    with strategy.scope():
+        detection_model = model_builder.build(model_config=model_config, is_training=True)
+        global_step = tf.Variable(
+            0, trainable=False, dtype=tf.int64, name='global_step',
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
+        optimizer, (learning_rate,) = optimizer_builder.build(
+            train_config.optimizer, global_step=global_step)
+        if callable(learning_rate):
+            learning_rate_fn = learning_rate
+        else:
+            learning_rate_fn = lambda: learning_rate
     # create tf.data.Dataset()
     train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
     eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
+    dist_train_input = strategy.experimental_distribute_dataset(train_input)
 
-    train_input_iterator = iter(train_input)
+    train_input_iterator = iter(dist_train_input)
 
-    global_step = tf.Variable(
-        0, trainable=False, dtype=tf.int64, name='global_step',
-        aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
-    optimizer, (learning_rate,) = optimizer_builder.build(
-        train_config.optimizer, global_step=global_step)
+    with strategy.scope():
+        # restore from checkpoint
+        load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint,
+                                        train_config.fine_tune_checkpoint_type,
+                                        train_config.fine_tune_checkpoint_version,
+                                        train_input,
+                                        train_config.unpad_groundtruth_tensors)
 
-    if callable(learning_rate):
-        learning_rate_fn = learning_rate
-    else:
-        learning_rate_fn = lambda: learning_rate
 
-    # restore from checkpoint
-    load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint,
-                                    train_config.fine_tune_checkpoint_type,
-                                    train_config.fine_tune_checkpoint_version,
-                                    train_input,
-                                    train_config.unpad_groundtruth_tensors)
-
+    
     @tf.function
-    def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step):
+    def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
 
         features, labels = train_input_iterator.next()
         loss = model_lib_v2.eager_train_step(detection_model, features,
@@ -169,7 +173,8 @@ def train(ctx: click.Context, train: TrainInput):
                             optimizer, learning_rate_fn(),
                             add_regularization_loss=True,
                             clip_gradients_value=None,
-                            global_step=global_step)
+                            global_step=global_step,
+                            num_replicas=num_replicas)
         global_step.assign_add(1)
         return loss
 
@@ -202,7 +207,7 @@ def train(ctx: click.Context, train: TrainInput):
         losses = []
         for step in range(1, num_train_steps+1):
 
-            losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step))
+            losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas))
             
             if step % config.get('log_train_every') == 0:
                 avg_loss = sum(losses) / len(losses)
