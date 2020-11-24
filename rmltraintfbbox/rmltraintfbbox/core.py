@@ -179,11 +179,11 @@ def train(ctx: click.Context, train: TrainInput):
             learning_rate_fn = learning_rate
         else:
             learning_rate_fn = lambda: learning_rate
-    """# create tf.data.Dataset()
-    train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
+    # create tf.data.Dataset()
+    #train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
     eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
-    dist_train_input = strategy.experimental_distribute_dataset(train_input)"""
-
+    #dist_train_input = strategy.experimental_distribute_dataset(train_input)
+    dist_eval_input = strategy.experimental_distribute_dataset(eval_input)
     
     #@tf.function
     def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
@@ -209,7 +209,7 @@ def train(ctx: click.Context, train: TrainInput):
 
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=detection_model)
         manager = tf.train.CheckpointManager(checkpoint, directory=model_dir, max_to_keep=5)
-        train_input_iterator = iter(dist_train_input)
+        train_input_iterator = iter(train_input)
         num_steps_per_iteration = 1
         def train_step_fn(features, labels):
             loss = model_lib_v2.eager_train_step(detection_model, features,
@@ -288,7 +288,8 @@ def train(ctx: click.Context, train: TrainInput):
         
                 if step % config.get('log_eval_every') == 0:
                     manager.save()
-                    eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                    eval_metrics = evaluate(detection_model, configs, dist_eval_input, global_step)
+                    print(eval_metrics)
                     if comet:
                         stack.enter_context(experiment.validate())
                         experiment.log_metrics(eval_metrics, step=step)
