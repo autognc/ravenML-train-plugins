@@ -129,6 +129,16 @@ def train(ctx: click.Context, train: TrainInput):
     num_train_steps = int(metadata['hyperparameters']['train_steps'])
     strategy = tf.distribute.MirroredStrategy()
     num_replicas = strategy.num_replicas_in_sync
+    model_lib_v2.train_loop( pipeline_config_path,
+    model_dir,
+    config_override=None,
+    train_steps=num_train_steps
+    use_tpu=False,
+    save_final_config=False,
+    checkpoint_every_n=1000,
+    checkpoint_max_to_keep=7,
+    **kwargs):
+    """
     print(f'number of GPUS: {num_replicas}')
     configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
     model_config = configs['model']
@@ -236,7 +246,7 @@ def train(ctx: click.Context, train: TrainInput):
 
     # get extra config files
     extra_files = _get_paths_for_extra_files(base_dir)
-
+    """
     if config.get('evaluate'):
         click.echo("Evaluating model...")
         with ExitStack() as stack:
