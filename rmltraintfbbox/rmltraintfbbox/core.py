@@ -129,6 +129,7 @@ def train(ctx: click.Context, train: TrainInput):
     num_train_steps = int(metadata['hyperparameters']['train_steps'])
     strategy = tf.distribute.MirroredStrategy()
     num_replicas = strategy.num_replicas_in_sync
+    """
     with strategy.scope()
         model_lib_v2.train_loop( pipeline_config_path,
                                     model_dir,
@@ -138,8 +139,8 @@ def train(ctx: click.Context, train: TrainInput):
                                     save_final_config=False,
                                     checkpoint_every_n=1000,
                                     checkpoint_max_to_keep=7)
-
     """
+
     print(f'number of GPUS: {num_replicas}')
     configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
     model_config = configs['model']
@@ -147,35 +148,44 @@ def train(ctx: click.Context, train: TrainInput):
     train_input_config = configs['train_input_config']
     eval_input_config = configs['eval_input_config']
     eval_config = configs['eval_config']
+    
+    
     with strategy.scope():
+        
         detection_model = model_builder.build(model_config=model_config, is_training=True)
+        
+        def train_dataset_fn(input_context):
+          """Callable to create train input."""
+          # Create the inputs.
+          train_input = inputs.train_input(
+              train_config=train_config,
+              train_input_config=train_input_config,
+              model_config=model_config,
+              model=detection_model,
+              input_context=input_context)
+          train_input = train_input.repeat()
+          return train_input
+        
+        train_input = strategy.experimental_distribute_datasets_from_function(
+            train_dataset_fn)
+        
         global_step = tf.Variable(
             0, trainable=False, dtype=tf.int64, name='global_step',
             aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
         optimizer, (learning_rate,) = optimizer_builder.build(
             train_config.optimizer, global_step=global_step)
+        
         if callable(learning_rate):
             learning_rate_fn = learning_rate
         else:
             learning_rate_fn = lambda: learning_rate
-    # create tf.data.Dataset()
+    """# create tf.data.Dataset()
     train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
     eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
-    dist_train_input = strategy.experimental_distribute_dataset(train_input)
-
-    train_input_iterator = iter(dist_train_input)
-
-    with strategy.scope():
-        # restore from checkpoint
-        load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint,
-                                        train_config.fine_tune_checkpoint_type,
-                                        train_config.fine_tune_checkpoint_version,
-                                        train_input,
-                                        train_config.unpad_groundtruth_tensors)
-
+    dist_train_input = strategy.experimental_distribute_dataset(train_input)"""
 
     
-    @tf.function
+    #@tf.function
     def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
 
         features, labels = train_input_iterator.next()
@@ -188,6 +198,54 @@ def train(ctx: click.Context, train: TrainInput):
                             num_replicas=num_replicas)
         global_step.assign_add(1)
         return loss
+        
+    with strategy.scope():
+        # restore from checkpoint
+        load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint,
+                                        train_config.fine_tune_checkpoint_type,
+                                        train_config.fine_tune_checkpoint_version,
+                                        train_input,
+                                        train_config.unpad_groundtruth_tensors)
+
+        checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=detection_model)
+        manager = tf.train.CheckpointManager(checkpoint, directory=model_dir, max_to_keep=5)
+        train_input_iterator = iter(dist_train_input)
+        num_steps_per_iteration = 1
+        def train_step_fn(features, labels):
+            loss = model_lib_v2.eager_train_step(detection_model, features,
+                                labels, train_config.unpad_groundtruth_tensors,
+                                optimizer, learning_rate_fn(),
+                                add_regularization_loss=True,
+                                clip_gradients_value=None,
+                                global_step=global_step,
+                                num_replicas=num_replicas)
+            global_step.assign_add(1)
+            return loss
+    
+        def _sample_and_train(strategy, train_step_fn, data_iterator):
+            features, labels = data_iterator.next()
+            if hasattr(tf.distribute.Strategy, 'run'):
+                per_replica_losses = strategy.run(
+                    train_step_fn, args=(features, labels))
+            else:
+                per_replica_losses = strategy.experimental_run_v2(
+                    train_step_fn, args=(features, labels))
+
+            return strategy.reduce(tf.distribute.ReduceOp.SUM,
+                                 per_replica_losses, axis=None)
+        @tf.function
+        def _dist_train_step(data_iterator):
+            """A distributed train step."""
+            if num_steps_per_iteration > 1:
+                for _ in tf.range(num_steps_per_iteration - 1):
+                    # Following suggestion on yaqs/5402607292645376
+                    with tf.name_scope(''):
+                        _sample_and_train(strategy, train_step_fn, data_iterator)
+
+            return _sample_and_train(strategy, train_step_fn, data_iterator)
+
+    
+    
 
     # @tf.function
     def evaluate(detection_model, configs, eval_input, global_step):
@@ -205,49 +263,48 @@ def train(ctx: click.Context, train: TrainInput):
 
         return metrics
 
-    checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=detection_model)
-    manager = tf.train.CheckpointManager(checkpoint, directory=model_dir, max_to_keep=5)
+    
 
     with ExitStack() as stack:
-        if comet:
-            stack.enter_context(experiment.train())
-        click.echo('Training model...')
+        with strategy.scope():
+            if comet:
+                stack.enter_context(experiment.train())
+            click.echo('Training model...')
 
-        start = time.time()
-        # main training loop
-        losses = []
-        for step in range(1, num_train_steps+1):
+            start = time.time()
+            # main training loop
+            losses = []
+            for step in range(1, num_train_steps+1):
 
-            losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas))
-            
-            if step % config.get('log_train_every') == 0:
-                avg_loss = sum(losses) / len(losses)
-                print(f'Avg train loss at step {step}: {avg_loss}')
-                losses = []
-                if comet:
-                    experiment.log_metric('avg_loss', avg_loss)
-                    
-    
-            if step % config.get('log_eval_every') == 0:
-                manager.save()
-                eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
-                if comet:
-                    stack.enter_context(experiment.validate())
-                    experiment.log_metrics(eval_metrics, step=step)
-                    stack.enter_context(experiment.train())
+                losses.append(_dist_train_step(train_input_iterator))
                 
+                if step % config.get('log_train_every') == 0:
+                    avg_loss = sum(losses) / len(losses)
+                    print(f'Avg train loss at step {step}: {avg_loss}')
+                    losses = []
+                    if comet:
+                        experiment.log_metric('avg_loss', avg_loss)
+                        
+        
+                if step % config.get('log_eval_every') == 0:
+                    manager.save()
+                    eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                    if comet:
+                        stack.enter_context(experiment.validate())
+                        experiment.log_metrics(eval_metrics, step=step)
+                        stack.enter_context(experiment.train())
+                    
 
-        training_time = time.time() - start
+            training_time = time.time() - start
 
-        click.echo(f'Training complete. Took {training_time} seconds.')
+            click.echo(f'Training complete. Took {training_time} seconds.')
 
-    # final metadata and return of TrainOutput object
-    datetime_finished = datetime.utcnow().isoformat() + "Z"
-    metadata['date_completed_at'] = datetime_finished
+        # final metadata and return of TrainOutput object
+        datetime_finished = datetime.utcnow().isoformat() + "Z"
+        metadata['date_completed_at'] = datetime_finished
 
     # get extra config files
     extra_files = _get_paths_for_extra_files(base_dir)
-    """
     if config.get('evaluate'):
         click.echo("Evaluating model...")
         with ExitStack() as stack:
