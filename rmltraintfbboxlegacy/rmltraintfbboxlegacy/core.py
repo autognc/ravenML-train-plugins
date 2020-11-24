@@ -116,6 +116,7 @@ def train(ctx: click.Context, train: TrainInput):
         experiment.set_git_metadata()
         experiment.set_os_packages()
         experiment.set_pip_packages()
+        experiment.log_parameter('dataset_name', train.config['dataset'])
         experiment.log_asset(pipeline_config_path)
 
     # get number of training steps
