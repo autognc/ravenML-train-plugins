@@ -18,6 +18,8 @@ def gen_truth_data(dir_path, rescale=1.0):
     for meta_file in meta_files:
         with open(meta_file, 'r') as f:
             meta = json.load(f)
+        meta['centroids'] = meta.get('centroids', {cls: [500, 500] for cls in meta['bboxes'].keys()})
+        meta['distance'] = meta.get('distance', 50)
         meta['bboxes'] = {cls: {k: v * rescale for k, v in bbox.items()} for cls, bbox in meta['bboxes'].items()}
         meta['centroids'] = {cls: tuple(v * rescale for v in centroid) for cls, centroid in meta['centroids'].items()}
         yield meta['bboxes'], meta['centroids'], meta['distance']

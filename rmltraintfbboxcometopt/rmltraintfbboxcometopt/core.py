@@ -25,6 +25,7 @@ import random
 import shutil
 import shortuuid
 import psutil
+import gc
 import rmltraintfbboxcometopt.validation.utils as utils
 from contextlib import ExitStack
 from pathlib import Path
@@ -132,6 +133,7 @@ def train(ctx: click.Context, train: TrainInput):
     "spec": {
         "metric": "mAP",
         "objective": "maximize",
+        "MaxCombo": 1,
         },
     "name": "Test-1",
     "trials": 1
@@ -201,9 +203,12 @@ def train(ctx: click.Context, train: TrainInput):
                                             train_config.unpad_groundtruth_tensors)
 
         @tf.function
-        def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step):
+        def train_step(detection_model, features, labels, optimizer, learning_rate_fn, global_step):
 
-            features, labels = train_input_iterator.next()
+
+            #print("trace")
+            #tf.print(global_step)
+            #features, labels = train_input_iterator.next()
             loss = model_lib_v2.eager_train_step(detection_model, features,
                                 labels, train_config.unpad_groundtruth_tensors,
                                 optimizer, learning_rate_fn(),
@@ -225,7 +230,7 @@ def train(ctx: click.Context, train: TrainInput):
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
 
-            click.echo(f'Evaluation loss: {metrics["Loss/total_loss"]}, Evaluation mAP: {metrics["DetectionBoxes_Precision/mAP"]}')
+            #click.echo(f'Evaluation loss: {metrics["Loss/total_loss"]}, Evaluation mAP: {metrics["DetectionBoxes_Precision/mAP"]}')
 
             return metrics
 
@@ -243,7 +248,9 @@ def train(ctx: click.Context, train: TrainInput):
             losses = []
             for step in range(1, num_train_steps+1):
 
-                losses.append(train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step))
+                
+                features, labels = train_input_iterator.next()
+                losses.append(train_step(detection_model, features, labels, optimizer, learning_rate_fn, global_step))
                 
                 if step % config.get('log_train_every') == 0:
                     avg_loss = sum(losses) / len(losses)
@@ -256,11 +263,12 @@ def train(ctx: click.Context, train: TrainInput):
                 if step % config.get('log_eval_every') == 0:
                     manager.save()
                     eval_metrics = evaluate(detection_model, configs, eval_input, global_step)
+                    click.echo(f'Evaluation loss: {eval_metrics["Loss/total_loss"]}, Evaluation mAP: {eval_metrics["DetectionBoxes_Precision/mAP"]}')
                     if comet:
                         stack.enter_context(experiment.validate())
                         experiment.log_metrics(eval_metrics, step=step)
                         stack.enter_context(experiment.train())
-                    
+                gc.collect()        
             
             training_time = time.time() - start
             

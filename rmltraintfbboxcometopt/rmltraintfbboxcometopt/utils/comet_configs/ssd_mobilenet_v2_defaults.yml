@@ -14,9 +14,9 @@ Adam:
         max: 0.004
     initial_learning_rate:
         type: float
-        scalingType: loguniform
-        min: 0.0001
-        max: 0.01
+        #scalingType: loguniform
+        min: 0.0004 #0.0001
+        max: 0.0099
     first_schedule_steps: 
         type: integer
         min: 12000
@@ -25,7 +25,7 @@ Adam:
         type: float
         scalingType: loguniform
         min: 5
-        max: 120
+        max: 30  #120
     second_schedule_steps: 
         type: integer
         min: 25000
@@ -34,7 +34,7 @@ Adam:
         type: float
         scalingType: loguniform
         min: 5
-        max: 120
+        max: 30 #120
     epsilon:
         type: float
         scalingType: loguniform
@@ -42,8 +42,8 @@ Adam:
         max: 0.00001
     batch_size : 
         type: integer
-        min: 1
-        max: 20
+        min: 9
+        max: 10
 Momentum:
     dropout_keep_probability: 
         type: float
