@@ -272,15 +272,18 @@ def train(ctx: click.Context, train: TrainInput):
         click.echo('Training model...')
 
         start = time.time()
+        step_start = time.time()
         # main training loop
         losses = []
         for step in range(1, num_train_steps+1):
-
+            
             losses.append(_dist_train_step(train_input_iterator))
                 
             if step % config.get('log_train_every') == 0:
+                step_time = time.time() - step_start
+                step_start = time.time()
                 avg_loss = sum(losses) / len(losses)
-                print(f'Avg train loss at step {step}: {avg_loss}')
+                print(f'Avg train loss at step {step}: {avg_loss}. Took {step_time} seconds')
                 losses = []
                 if comet:
                     experiment.log_metric('avg_loss', avg_loss)
