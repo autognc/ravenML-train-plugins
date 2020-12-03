@@ -266,39 +266,39 @@ def train(ctx: click.Context, train: TrainInput):
     
 
     with ExitStack() as stack:
-        with strategy.scope():
-            if comet:
-                stack.enter_context(experiment.train())
-            click.echo('Training model...')
+        #with strategy.scope():
+        if comet:
+            stack.enter_context(experiment.train())
+        click.echo('Training model...')
 
-            start = time.time()
-            # main training loop
-            losses = []
-            for step in range(1, num_train_steps+1):
+        start = time.time()
+        # main training loop
+        losses = []
+        for step in range(1, num_train_steps+1):
 
-                losses.append(_dist_train_step(train_input_iterator))
+            losses.append(_dist_train_step(train_input_iterator))
                 
-                if step % config.get('log_train_every') == 0:
-                    avg_loss = sum(losses) / len(losses)
-                    print(f'Avg train loss at step {step}: {avg_loss}')
-                    losses = []
-                    if comet:
-                        experiment.log_metric('avg_loss', avg_loss)
+            if step % config.get('log_train_every') == 0:
+                avg_loss = sum(losses) / len(losses)
+                print(f'Avg train loss at step {step}: {avg_loss}')
+                losses = []
+                if comet:
+                    experiment.log_metric('avg_loss', avg_loss)
                         
         
-                if step % config.get('log_eval_every') == 0:
-                    manager.save()
-                    eval_metrics = evaluate(dist_eval_input)
-                    print(eval_metrics)
-                    if comet:
-                        stack.enter_context(experiment.validate())
-                        experiment.log_metrics(eval_metrics, step=step)
-                        stack.enter_context(experiment.train())
+            if step % config.get('log_eval_every') == 0:
+                manager.save()
+                eval_metrics = evaluate(dist_eval_input)
+                print(eval_metrics)
+                if comet:
+                    stack.enter_context(experiment.validate())
+                    experiment.log_metrics(eval_metrics, step=step)
+                    stack.enter_context(experiment.train())
                     
 
-            training_time = time.time() - start
+        training_time = time.time() - start
 
-            click.echo(f'Training complete. Took {training_time} seconds.')
+        click.echo(f'Training complete. Took {training_time} seconds.')
 
         # final metadata and return of TrainOutput object
         datetime_finished = datetime.utcnow().isoformat() + "Z"
