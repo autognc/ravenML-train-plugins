@@ -243,25 +243,25 @@ def train(ctx: click.Context, train: TrainInput):
                         _sample_and_train(strategy, train_step_fn, data_iterator)
 
             return _sample_and_train(strategy, train_step_fn, data_iterator)
+        def evaluate(eval_input):
+            #text_trap = io.StringIO()
+            #sys.stdout = text_trap
+            #sys.stderr = text_trap
 
-    
+            metrics = model_lib_v2.eager_eval_loop(detection_model, configs, eval_input, global_step=global_step)
+
+            #sys.stdout = sys.__stdout__
+            #sys.stderr = sys.__stderr__
+
+            click.echo(f'Evaluation loss: {metrics["Loss/total_loss"]}, Evaluation mAP: {metrics["DetectionBoxes_Precision/mAP"]}')
+
+            return metrics
+        
     
 
     # @tf.function
-    def evaluate(detection_model, configs, eval_input, global_step):
-
-        text_trap = io.StringIO()
-        sys.stdout = text_trap
-        sys.stderr = text_trap
-
-        metrics = model_lib_v2.eager_eval_loop(detection_model, configs, eval_input, global_step=global_step)
-
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-
-        click.echo(f'Evaluation loss: {metrics["Loss/total_loss"]}, Evaluation mAP: {metrics["DetectionBoxes_Precision/mAP"]}')
-
-        return metrics
+    #def evaluate(detection_model, configs, eval_input, global_step):
+    
 
     
 
@@ -288,7 +288,7 @@ def train(ctx: click.Context, train: TrainInput):
         
                 if step % config.get('log_eval_every') == 0:
                     manager.save()
-                    eval_metrics = evaluate(detection_model, configs, dist_eval_input, global_step)
+                    eval_metrics = evaluate(dist_eval_input)
                     print(eval_metrics)
                     if comet:
                         stack.enter_context(experiment.validate())
