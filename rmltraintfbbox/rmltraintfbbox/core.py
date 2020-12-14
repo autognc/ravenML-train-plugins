@@ -39,6 +39,7 @@ from matplotlib import pyplot as plt
 from object_detection import model_lib, model_lib_v2, inputs, protos
 from object_detection.builders import optimizer_builder, model_builder
 from object_detection.utils import label_map_util, visualization_utils, config_util
+from rmltraintfbbox.utils import filter_input
 
 # regex to ignore 0 indexed checkpoints
 checkpoint_regex = re.compile(r'model.ckpt-[1-9][0-9]*.[a-zA-Z0-9_-]+')
@@ -135,10 +136,14 @@ def train(ctx: click.Context, train: TrainInput):
     eval_config = configs['eval_config']
 
     detection_model = model_builder.build(model_config=model_config, is_training=True)
-
-    # create tf.data.Dataset()
-    train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
-    eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
+    
+    if config.get('imagesets'):
+        imagesets = config.get('imagesets')
+        train_input = filter_input.train_input(imagesets, train_config, train_input_config, model_config, model=detection_model)
+        eval_input = filter_input.eval_input(imagesets, eval_config, eval_input_config, model_config, model=detection_model)
+    else:
+        train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
+        eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
 
     train_input_iterator = iter(train_input)
 
