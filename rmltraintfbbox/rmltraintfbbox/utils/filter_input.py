@@ -26,13 +26,9 @@ def intermediate_parse(dataset, imagesets):
             'image/object/bbox/ymin': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
             'image/object/bbox/ymax': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
             'image/object/class/text': tf.io.FixedLenFeature([], tf.string, default_value=''),
-            'image/object/class/label': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-            'image/object/keypoints': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            'image/object/pose': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            'image/object/translation': tf.io.FixedLenFeature([], tf.float32, default_value=0.0)}
+            'image/object/class/label': tf.io.FixedLenFeature([], tf.int64, default_value=0)}
         parsed_example = tf.io.parse_example(element, feature_description)
-        imageset = tf.io.parse_tensor(parsed_example['image/imageset'], out_type = tf.string)
-
+        imageset = parsed_example['image/imageset']
         return in_list(imageset)
 
     def in_list(imgset):
@@ -40,7 +36,7 @@ def intermediate_parse(dataset, imagesets):
       for imageset in imagesets:
         if imgset == imageset:
           b = True
-      return True
+      return b
 
     dataset = dataset.filter(predicate)
     return dataset
@@ -109,10 +105,11 @@ def build(imagesets, input_reader_config, batch_size=None, transform_input_data_
         config.input_path[:], input_reader_config, filename_shard_fn=shard_fn)
     if input_reader_config.sample_1_of_n_examples > 1:
       dataset = dataset.shard(input_reader_config.sample_1_of_n_examples, 0)
-
-    #NOTE: intermediate parse   
+ 
+    dataset = intermediate_parse(dataset, imagesets)
     dataset = dataset_map_fn(dataset, decoder.decode, batch_size,
                              input_reader_config)
+
     if reduce_to_frame_fn:
       dataset = reduce_to_frame_fn(dataset, dataset_map_fn, batch_size,
                                    input_reader_config)
