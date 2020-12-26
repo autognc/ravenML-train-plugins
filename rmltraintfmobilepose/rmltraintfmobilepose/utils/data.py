@@ -29,7 +29,6 @@ def dataset_from_directory(
             "bbox": metadata["bboxes"]["cygnus"],
             "pose": metadata["pose"],
             "translation": metadata["translation"],
-            "focal_length": metadata["focal_length"],
             "image_id": img_id,
         }
         if "focal_length" in metadata:
