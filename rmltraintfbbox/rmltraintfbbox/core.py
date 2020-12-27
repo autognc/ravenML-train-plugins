@@ -169,10 +169,8 @@ def train(ctx: click.Context, train: TrainInput):
         else:
             learning_rate_fn = lambda: learning_rate
     # create tf.data.Dataset()
-    #train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
-    eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
-    #dist_train_input = strategy.experimental_distribute_dataset(train_input)
-    #dist_eval_input = strategy.experimental_distribute_dataset(eval_input)
+    dist_eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
+
     
     #@tf.function
     def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
@@ -246,21 +244,7 @@ def train(ctx: click.Context, train: TrainInput):
             click.echo(f'Evaluation loss: {metrics["Loss/total_loss"]}, Evaluation mAP: {metrics["DetectionBoxes_Precision/mAP"]}')
 
             return metrics
-        
     
-
-    # @tf.function
-    #def evaluate(detection_model, configs, eval_input, global_step):
-    
-
-    model_lib_v2.eval_continuously(
-        pipeline_config_path=pipeline_config_path,
-        model_dir=model_dir,
-        train_steps=num_train_steps,
-        sample_1_of_n_eval_examples=100,
-        sample_1_of_n_eval_on_train_examples=1000,
-        checkpoint_dir=model_dir,
-        wait_interval=300, timeout=3600)
 
     with ExitStack() as stack:
         #with strategy.scope():
@@ -285,7 +269,6 @@ def train(ctx: click.Context, train: TrainInput):
                 if comet:
                     experiment.log_metric('avg_loss', avg_loss)
                         
-            """
             if step % config.get('log_eval_every') == 0:
                 manager.save()
                 eval_metrics = evaluate(dist_eval_input)
@@ -293,7 +276,6 @@ def train(ctx: click.Context, train: TrainInput):
                     stack.enter_context(experiment.validate())
                     experiment.log_metrics(eval_metrics, step=step)
                     stack.enter_context(experiment.train())
-            """
         
         training_time = time.time() - start
 
