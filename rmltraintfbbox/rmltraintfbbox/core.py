@@ -129,17 +129,6 @@ def train(ctx: click.Context, train: TrainInput):
     num_train_steps = int(metadata['hyperparameters']['train_steps'])
     strategy = tf.distribute.MirroredStrategy()
     num_replicas = strategy.num_replicas_in_sync
-    """
-    with strategy.scope()
-        model_lib_v2.train_loop( pipeline_config_path,
-                                    model_dir,
-                                    config_override=None,
-                                    train_steps=num_train_steps,
-                                    use_tpu=False,
-                                    save_final_config=False,
-                                    checkpoint_every_n=1000,
-                                    checkpoint_max_to_keep=7)
-    """
 
     print(f'number of GPUS: {num_replicas}')
     configs = config_util.get_configs_from_pipeline_file(pipeline_config_path)
@@ -183,7 +172,7 @@ def train(ctx: click.Context, train: TrainInput):
     #train_input = inputs.train_input(train_config, train_input_config, model_config, model=detection_model)
     eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
     #dist_train_input = strategy.experimental_distribute_dataset(train_input)
-    dist_eval_input = strategy.experimental_distribute_dataset(eval_input)
+    #dist_eval_input = strategy.experimental_distribute_dataset(eval_input)
     
     #@tf.function
     def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
@@ -243,6 +232,7 @@ def train(ctx: click.Context, train: TrainInput):
                         _sample_and_train(strategy, train_step_fn, data_iterator)
 
             return _sample_and_train(strategy, train_step_fn, data_iterator)
+        
         def evaluate(eval_input):
             #text_trap = io.StringIO()
             #sys.stdout = text_trap
@@ -263,7 +253,14 @@ def train(ctx: click.Context, train: TrainInput):
     #def evaluate(detection_model, configs, eval_input, global_step):
     
 
-    
+    model_lib_v2.eval_continuously(
+        pipeline_config_path=pipeline_config_path,
+        model_dir=model_dir,
+        train_steps=num_train_steps,
+        sample_1_of_n_eval_examples=100,
+        sample_1_of_n_eval_on_train_examples=1000,
+        checkpoint_dir=model_dir,
+        wait_interval=300, timeout=3600)
 
     with ExitStack() as stack:
         #with strategy.scope():
@@ -288,17 +285,16 @@ def train(ctx: click.Context, train: TrainInput):
                 if comet:
                     experiment.log_metric('avg_loss', avg_loss)
                         
-        
+            """
             if step % config.get('log_eval_every') == 0:
                 manager.save()
                 eval_metrics = evaluate(dist_eval_input)
-                print(eval_metrics)
                 if comet:
                     stack.enter_context(experiment.validate())
                     experiment.log_metrics(eval_metrics, step=step)
                     stack.enter_context(experiment.train())
-                    
-
+            """
+        
         training_time = time.time() - start
 
         click.echo(f'Training complete. Took {training_time} seconds.')
