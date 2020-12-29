@@ -4,7 +4,8 @@ Train and/or eval CullNet
 Show Help
 $ ravenml train --config train_config.json tf-mobilepose cull --help
 
-Train a `mobilenetv2_imagenet_mse` cullnet model using `numpy_cut`-masks. Use `cull.npy` to cache error data.
+Train a `mobilenetv2_imagenet_mse` cullnet model using `numpy_cut`-masks. Use `cull.npy` to cache error data. 
+    `pose_model.h5` is used for generating error data.
 $ ravenml train --config train_config.json tf-mobilepose cull pose_model.h5 ~/ravenml/datasets/cygnus_20k_re_norm_mix_drb/test 
     -f 1422 -k numpy_cut -c cull.npy -m mobilenetv2_imagenet_mse
 
@@ -80,11 +81,12 @@ class NumpyMaskProjector(MaskGenerator):
 
 
 def create_model_mobilenetv2_imagenet_mse(input_shape):
+    assert input_shape[-1] == 3, 'Using this model requires cut mask generation for 3-channel input data'
     model = tf.keras.applications.MobileNetV2(
         input_shape=input_shape,
         include_top=True,
         weights="imagenet",
-        # These are ignored, but required for weights
+        # These are ignored, but required to load weights
         classes=1000,
         classifier_activation="softmax",
     )
@@ -109,13 +111,13 @@ cull_error_metrics = {
     "keypoint_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: 
             np.mean([np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps_pred, kps_true)]),
-        lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3, 3),
+        lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3.5, 3.5),
         lambda ynorm: np.exp(ynorm * 0.1731 + 5.935)),
     "geodesic_rotation": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true:
             utils.pose.geodesic_error(r_vec, pose_true),
-        lambda y: y, # TODO
-        lambda ynorm: ynorm),
+        lambda y: np.clip((np.log(y) + 3.040) / 1.036, -3.5, 3.5),
+        lambda ynorm: np.exp(ynorm * 1.036 + 3.040)),
     "position_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true:
             utils.pose.position_error(t_vec, position_true)[0],
@@ -129,7 +131,7 @@ cull_error_metrics = {
 # "_stack" will stack the mask on to the image as another channel
 #       this is what's done in the original cullnet paper
 # "_cut" (passed as stack=False) will cut out the shape of the mask from the original image
-#       this is cool b/c it allows one to reuse 3-channel trained models
+#       this is cool b/c it allows one to reuse 3-channel pretrained models
 cull_mask_generators = {
     "numpy_stack": lambda *args, **kwargs: NumpyMaskProjector(*args, **kwargs, stack=True),
     "numpy_cut": lambda *args, **kwargs: NumpyMaskProjector(*args, **kwargs, stack=False),
@@ -175,7 +177,7 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
     error_func, error_norm, error_denorm = cull_error_metrics[error_metric]
 
     if not cache or not os.path.exists('cull-masks.' + cache):
-        # Use pose model to make cull training data
+        print('Using', model_path, 'to generate cullnet training data...')
         mask_gen_init = cull_mask_generators[mask_mode]
         # TODO make hardcoded stuff into options
         if mask_mode.startswith("numpy"):
@@ -191,8 +193,8 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
         X, y = np.load('cull-masks.' + cache), np.load('cull-errors.' + cache)
     print('Loaded dataset: ', X.shape, ' -> ', y.shape)
 
-    ynorm = error_norm(y)
     # Ensure error data/labels looks good to feed into the model
+    ynorm = error_norm(y)
     print('error        mean=', y.mean(), 'std=', y.std())
     print('error (norm) mean=', ynorm.mean(), 'std=', ynorm.std())
     _, (ax, ax2) = plt.subplots(nrows=2)
@@ -200,7 +202,7 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
     ax.set_title('error')
     ax2.hist(ynorm)
     ax2.set_title('error (norm)')
-    plt.savefig('cull-errors.png')
+    plt.savefig('cull-error-dist.png')
 
     # Train/Test Shuffle & Split
     np.random.seed(0)
@@ -211,12 +213,12 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
     X_train, y_train, X_test, y_test = X[train_idxs], ynorm[train_idxs], X[test_idxs], ynorm[test_idxs]
 
     if eval_trained_cull_model is None:
-        print('Training cullnet...')
+        print('Training cullnet...', X_train.shape, X_test.shape)
         model_name = model_type + "-" + str(int(time.time()))
         cull_model = cull_models[model_type](X.shape[1:])
         cull_model = train_model(model_name, cull_model, X_train, y_train, X_test, y_test)
     else:
-        print('Using pretrained cullnet...')
+        print('Using pretrained cullnet...', eval_trained_cull_model)
         model_name = eval_trained_cull_model.replace('\\', '').replace('/', '').replace(':', '')
         cull_model = tf.keras.models.load_model(eval_trained_cull_model)
 
@@ -235,7 +237,7 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
         print(pred_name, 'l2=', l2_pred, 'r=', corr_pred)
         axis.scatter(data[0], data[1])
         axis.set_title(pred_name)
-    plt.savefig(model_name + '-predictions.png')
+    plt.savefig('cull-' + model_name + '-predictions.png')
 
 
 def train_model(model_name, model, X_train, y_train, X_test, y_test):
@@ -250,7 +252,7 @@ def train_model(model_name, model, X_train, y_train, X_test, y_test):
         )
     ]
     try:
-        # epochs is set high, use ^C to finish training
+        # epochs is set high, use a *single* ^C to finish training
         model.fit(
             X_train,
             y_train,
