@@ -1,14 +1,27 @@
 """
-Train and Eval CullNet
+Train and/or eval CullNet
+
+Show Help
+$ ravenml train --config train_config.json tf-mobilepose cull --help
+
+Train a `mobilenetv2_imagenet_mse` cullnet model using `numpy_cut`-masks. Use `cull.npy` to cache error data.
+$ ravenml train --config train_config.json tf-mobilepose cull pose_model.h5 ~/ravenml/datasets/cygnus_20k_re_norm_mix_drb/test 
+    -f 1422 -k numpy_cut -c cull.npy -m mobilenetv2_imagenet_mse
+
+Eval model `mobilenetv2_imagenet_mse-1609270326-best.h5` on `~/ravenml/datasets/cygnus_20k_re_norm_mix_drb/test` data.
+$ ravenml train --config train_config.json tf-mobilepose cull pose_model.h5 ~/ravenml/datasets/cygnus_20k_re_norm_mix_drb/test 
+    -f 1422 -k numpy_cut -c cull.npy -m mobilenetv2_imagenet_mse -t mobilenetv2_imagenet_mse-1609270326-best.h5
 """
 from scipy.spatial.transform import Rotation
+import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
-import os
 import click
-import json
-import cv2
+import time
 import tqdm
+import cv2
+import os
+
 from .. import utils
 
 
@@ -22,12 +35,19 @@ class MaskGenerator:
 
     def make_and_apply_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
         mask = self.make_binary_mask(image, r_vec, t_vec, focal_length, extra_crop_params)
-        cv2.imshow('mask', im2 * 255)
-        while True:
-            if cv2.waitKey(0) & 0xff == ord('q'):
-                break
-        cv2.destroyAllWindows()
-        asdasd
+        assert mask.shape[:2] == image.shape[:2]
+        if self.stack:
+            w, h, c = image.shape
+            assert c == 3
+            image_and_mask = np.empty((w, h, c + 1))
+            image_and_mask[:, :, :3] = image
+            # mask is [0, 1]
+            image_and_mask[:, :, 3] = mask * 1
+        else:
+            image_and_mask = image.copy()
+            # -1 dependent on how image is encoded
+            image_and_mask[np.where(mask == 0)] = [-1, -1, -1]
+        return image_and_mask
 
 
 class NumpyMaskProjector(MaskGenerator):
@@ -59,25 +79,64 @@ class NumpyMaskProjector(MaskGenerator):
         return img
 
 
+def create_model_mobilenetv2_imagenet_mse(input_shape):
+    model = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape,
+        include_top=True,
+        weights="imagenet",
+        # These are ignored, but required for weights
+        classes=1000,
+        classifier_activation="softmax",
+    )
+    new_input = model.input
+    feat_out = model.layers[-2].output
+    out = tf.keras.layers.Dense(1, activation="linear")(feat_out)
+    full_model = tf.keras.models.Model(new_input, out)
+    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
+    return full_model
+
+
+# Several possible cullnet models
+#   name: model_generator_function
+cull_models = {
+    "mobilenetv2_imagenet_mse": create_model_mobilenetv2_imagenet_mse
+}
+
+
+# Several possible error metrics
+#   name: (error_calc_function, normalize, denormalize)
 cull_error_metrics = {
-    "keypoint_l2": 
+    "keypoint_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: 
             np.mean([np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps_pred, kps_true)]),
-    "geodesic_rotation":
+        lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3, 3),
+        lambda ynorm: np.exp(ynorm * 0.1731 + 5.935)),
+    "geodesic_rotation": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true:
             utils.pose.geodesic_error(r_vec, pose_true),
-    "position_l2": 
+        lambda y: y, # TODO
+        lambda ynorm: ynorm),
+    "position_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true:
-            utils.pose.position_error(t_vec, position_true)[0]
+            utils.pose.position_error(t_vec, position_true)[0],
+        lambda y: y, # TODO
+        lambda ynorm: ynorm)
 }
 
 
+# Several possible mask encodings
+#   name: constructor
+# "_stack" will stack the mask on to the image as another channel
+#       this is what's done in the original cullnet paper
+# "_cut" (passed as stack=False) will cut out the shape of the mask from the original image
+#       this is cool b/c it allows one to reuse 3-channel trained models
 cull_mask_generators = {
     "numpy_stack": lambda *args, **kwargs: NumpyMaskProjector(*args, **kwargs, stack=True),
+    "numpy_cut": lambda *args, **kwargs: NumpyMaskProjector(*args, **kwargs, stack=False),
 }
 
 
-@click.command(help="Trained Pose Model (.h5)")
+@click.command(help="Train/Use CullNet")
 @click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
 @click.option(
@@ -88,31 +147,122 @@ cull_mask_generators = {
 )
 @click.option("-f", "--focal_length", type=float, required=True)
 @click.option(
-    "-m", 
+    "-e", 
     "--error_metric", 
     type=click.Choice(cull_error_metrics.keys(), case_sensitive=False), 
     default=next(iter(cull_error_metrics))
 )
 @click.option(
-    "-g", 
+    "-k", 
     "--mask_mode", 
     type=click.Choice(cull_mask_generators.keys(), case_sensitive=False), 
     default=next(iter(cull_mask_generators))
 )
-def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode):
+@click.option(
+    "-m", 
+    "--model_type", 
+    type=click.Choice(cull_models.keys(), case_sensitive=False), 
+    default=next(iter(cull_models))
+)
+@click.option("-t", "--eval_trained_cull_model", type=click.Path(exists=True, dir_okay=False))
+@click.option("-c", "--cache", help="Cache dataset here", type=click.Path(dir_okay=False))
+def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode, model_type, eval_trained_cull_model, cache):
+
     model = tf.keras.models.load_model(model_path, compile=False)
     model.compile(
         optimizer=tf.keras.optimizers.SGD(), loss=lambda _: 0,
     )
-    error_func = cull_error_metrics[error_metric]
-    mask_gen_init = cull_mask_generators[mask_mode]
-    if mask_mode.startswith("numpy"):
-        # TODO make option
-        mask_gen = mask_gen_init(np.load("keypoints700k.npy"), size=224)
+    error_func, error_norm, error_denorm = cull_error_metrics[error_metric]
+
+    if not cache or not os.path.exists('cull-masks.' + cache):
+        # Use pose model to make cull training data
+        mask_gen_init = cull_mask_generators[mask_mode]
+        # TODO make hardcoded stuff into options
+        if mask_mode.startswith("numpy"):
+            mask_gen = mask_gen_init(np.load("keypoints700k.npy"), size=224)
+        else:
+            mask_gen = mask_gen_init(size=224)
+        X, y = compute_model_error_training_data(model, directory, keypoints, focal_length, error_func, mask_gen)
+        if cache:
+            np.save('cull-masks.' + cache, X)
+            np.save('cull-errors.' + cache, y)
     else:
-        raise ValueError('Unable to init mask generator')
-    X, y = compute_model_error_training_data(model, directory, keypoints, focal_length, error_func, mask_gen)
-    print(X.shape, y.shape)
+        print('Using cached data...')
+        X, y = np.load('cull-masks.' + cache), np.load('cull-errors.' + cache)
+    print('Loaded dataset: ', X.shape, ' -> ', y.shape)
+
+    ynorm = error_norm(y)
+    # Ensure error data/labels looks good to feed into the model
+    print('error        mean=', y.mean(), 'std=', y.std())
+    print('error (norm) mean=', ynorm.mean(), 'std=', ynorm.std())
+    _, (ax, ax2) = plt.subplots(nrows=2)
+    ax.hist(y)
+    ax.set_title('error')
+    ax2.hist(ynorm)
+    ax2.set_title('error (norm)')
+    plt.savefig('cull-errors.png')
+
+    # Train/Test Shuffle & Split
+    np.random.seed(0)
+    shuffle_idxs = np.random.permutation(len(X))
+    train_size = int(len(X) * 0.7)
+    train_idxs, test_idxs = shuffle_idxs[:train_size], shuffle_idxs[train_size:]
+    X_train, y_train, X_test, y_test = X[train_idxs], ynorm[train_idxs], X[test_idxs], ynorm[test_idxs]
+
+    if eval_trained_cull_model is None:
+        # Train new cull model
+        model_name = model_type + "-" + str(int(time.time()))
+        cull_model = cull_models[model_type](X.shape[1:])
+        cull_model = train_model(model_name, cull_model, X_train, y_train, X_test, y_test)
+    else:
+        # Load pretrained cull model
+        model_name = eval_trained_cull_model.replace('\\', '').replace('/', '').replace(':', '')
+        cull_model = tf.keras.models.load_model(eval_trained_cull_model)
+
+    y_pred = cull_model.predict(X).squeeze()
+    y_test_pred = cull_model.predict(X_test).squeeze()
+
+    # Plot & Log results (includes results for all examples and just test examples, normalized and at original scale)
+    _, ((ax, ax2), (ax3, ax4)) = plt.subplots(nrows=2, ncols=2)
+    for data, pred_name, axis in zip(
+        [(y_pred, y), (y_test_pred, y_test), (error_denorm(y_pred), error_denorm(y)), (error_denorm(y_test_pred), error_denorm(y_test))], 
+        ['y (norm)', 'y_test (norm)', 'y', 'y_test'], 
+        [ax, ax2, ax3, ax4]
+    ):
+        l2_pred = np.linalg.norm(data[0] - data[1])
+        corr_pred = np.corrcoef(data[0], data[1])[0, 1]
+        print(pred_name, 'l2=', l2_pred, 'r=', corr_pred)
+        axis.scatter(data[0], data[1])
+        axis.set_title(pred_name)
+    plt.savefig(model_name + '-predictions.png')
+
+
+def train_model(model_name, model, X_train, y_train, X_test, y_test):
+    save_name = model_name + "-best.h5"
+    callbacks = [
+        tf.keras.callbacks.ModelCheckpoint(
+            save_name,
+            save_best_only=True,
+            monitor="val_loss",
+            mode="min",
+            verbose=True,
+        )
+    ]
+    try:
+        # epochs is set high, use ^C to finish training
+        model.fit(
+            X_train,
+            y_train,
+            batch_size=64,
+            epochs=500,
+            verbose=2,
+            validation_data=(X_test, y_test),
+            callbacks=callbacks,
+        )
+    except KeyboardInterrupt:
+        print('Stopping...')
+    print('Loading best save...')
+    return tf.keras.models.load_model(save_name)
 
 
 def compute_model_error_training_data(model, directory, keypoints, focal_length, error_func, mask_gen):
@@ -141,7 +291,7 @@ def compute_model_error_training_data(model, directory, keypoints, focal_length,
         kps_batch = utils.model.decode_displacement_field(kps_batch)
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         for image, kps, truth in zip(image_batch, kps_batch.numpy(), truth_batch):
-            image = tf.cast(image * 127.5 + 127.5, tf.uint8).numpy()
+            image = image.numpy()
             kps_true = (truth["keypoints"] - truth["centroid"]) / truth[
                 "bbox_size"
             ] * cropsize + (cropsize // 2)
