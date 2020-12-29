@@ -207,25 +207,26 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
     shuffle_idxs = np.random.permutation(len(X))
     train_size = int(len(X) * 0.7)
     train_idxs, test_idxs = shuffle_idxs[:train_size], shuffle_idxs[train_size:]
+    # these are all normalized
     X_train, y_train, X_test, y_test = X[train_idxs], ynorm[train_idxs], X[test_idxs], ynorm[test_idxs]
 
     if eval_trained_cull_model is None:
-        # Train new cull model
+        print('Training cullnet...')
         model_name = model_type + "-" + str(int(time.time()))
         cull_model = cull_models[model_type](X.shape[1:])
         cull_model = train_model(model_name, cull_model, X_train, y_train, X_test, y_test)
     else:
-        # Load pretrained cull model
+        print('Using pretrained cullnet...')
         model_name = eval_trained_cull_model.replace('\\', '').replace('/', '').replace(':', '')
         cull_model = tf.keras.models.load_model(eval_trained_cull_model)
 
-    y_pred = cull_model.predict(X).squeeze()
-    y_test_pred = cull_model.predict(X_test).squeeze()
+    ynorm_pred = cull_model.predict(X).squeeze()
+    ynorm_test_pred = cull_model.predict(X_test).squeeze()
 
     # Plot & Log results (includes results for all examples and just test examples, normalized and at original scale)
     _, ((ax, ax2), (ax3, ax4)) = plt.subplots(nrows=2, ncols=2)
     for data, pred_name, axis in zip(
-        [(y_pred, y), (y_test_pred, y_test), (error_denorm(y_pred), error_denorm(y)), (error_denorm(y_test_pred), error_denorm(y_test))], 
+        [(ynorm_pred, ynorm), (ynorm_test_pred, y_test), (error_denorm(ynorm_pred), error_denorm(ynorm)), (error_denorm(ynorm_test_pred), error_denorm(y_test))], 
         ['y (norm)', 'y_test (norm)', 'y', 'y_test'], 
         [ax, ax2, ax3, ax4]
     ):
