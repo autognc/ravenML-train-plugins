@@ -128,17 +128,25 @@ def display_geodesic_stats(errs_pose, errs_position):
         return
     print(f"\n---- Position Error Stats ----")
     stats = {
-        "mean": np.mean(errs_position),
-        "median": np.median(errs_position),
-        "max": np.max(errs_position),
+        "mean": np.mean(errs_position[0]),
+        "median": np.median(errs_position[0]),
+        "max": np.max(errs_position[0]),
+    }
+    for label, val in stats.items():
+        print(f"{label:8s} = {val:.3f}")
+    print(f"\n---- Position Error Stats (norm) ----")
+    stats = {
+        "mean": np.mean(errs_position[1]),
+        "median": np.median(errs_position[1]),
+        "max": np.max(errs_position[1]),
     }
     for label, val in stats.items():
         print(f"{label:8s} = {val:.3f}")
     print(f"\n---- Combined Error Stats ----")
     stats = {
-        "mean": np.mean(errs_position + errs_pose),
-        "median": np.median(errs_position + errs_pose),
-        "max": np.max(errs_position + errs_pose),
+        "mean": np.mean(errs_position[1] + errs_pose),
+        "median": np.median(errs_position[1] + errs_pose),
+        "max": np.max(errs_position[1] + errs_pose),
     }
     for label, val in stats.items():
         print(f"{label:8s} = {val:.3f}")
