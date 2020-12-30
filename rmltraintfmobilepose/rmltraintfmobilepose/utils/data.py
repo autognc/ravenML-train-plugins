@@ -11,15 +11,13 @@ def recursive_map_dict(d, f):
     return f(d)
 
 
-def dataset_from_directory(
-    dir_path, cropsize, nb_keypoints=None, focal_length=1422.22222
-):
+def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=None):
     """
     Get a Tensorflow dataset that generates samples from a directory with test data
     that is not in TFRecord format (i.e. a directory with image_*.png and meta_*.json files).
     The images are cropped to the spacecraft using the bounding box truth data.
     :param dir_path: the path to the directory
-    :param cropsize: the output size for the images, in pixels
+    :param crop_size: the output size for the images, in pixels
     :return: a Tensorflow dataset that generates (image, metadata) tuples where image is a [cropsize, cropsize, 3]
     Tensor and metadata is a dictionary of Tensors.
     """
@@ -31,7 +29,7 @@ def dataset_from_directory(
             "translation": metadata["translation"],
             "image_id": img_id,
         }
-        if "focal_length" in metadata:
+        if focal_length is None:
             parsed["focal_length"] = metadata["focal_length"]
         else:
             parsed["focal_length"] = focal_length
@@ -73,7 +71,7 @@ def dataset_from_directory(
 
         # load and crop image
         image_data = tf.io.read_file(image_file)
-        imdims, image = preprocess_image(image_data, centroid, bbox_size, cropsize)
+        imdims, image = preprocess_image(image_data, centroid, bbox_size, crop_size)
 
         truth = {
             "pose": tf.ensure_shape(metadata["pose"], [4]),
