@@ -29,7 +29,7 @@ def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=
             "translation": metadata["translation"],
             "image_id": img_id,
         }
-        if "focal_length" is None:
+        if focal_length is None:
             parsed["focal_length"] = metadata["focal_length"]
         else:
             parsed["focal_length"] = focal_length

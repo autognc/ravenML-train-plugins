@@ -20,7 +20,6 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         super().__init__()
         self.model = model
         self.ref_points = ref_points
-        self.crop_size = crop_size
         self.focal_length = focal_length
         self.experiment = experiment
         self.targets = tf.Variable(0.0, shape=tf.TensorShape(None))
@@ -43,27 +42,33 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         return 0
 
     def calc_pose_error(self):
-        label = KeypointsModel.decode_label(self.targets.numpy())
+        truth_batch = KeypointsModel.decode_label(self.targets.numpy())
         kps_batch = self.outputs.numpy()
-        kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
-
+        kps_batch_uncropped = (
+            kps_batch
+            / 2
+            * truth_batch["bbox_size"][
+                :,
+                None,
+                None,
+                None,
+            ]
+            + truth_batch["centroid"][:, None, None, :]
+        )
         error_batch = np.zeros(kps_batch.shape[0])
-        for i, kps in enumerate(kps_batch):
+        for i, kps in enumerate(kps_batch_uncropped.numpy()):
             r_vec, t_vec = utils.pose.solve_pose(
                 self.ref_points,
                 kps,
                 [self.focal_length, self.focal_length],
-                [self.crop_size, self.crop_size],
-                extra_crop_params={
-                    "centroid": label["centroid"][i],
-                    "bbox_size": label["bbox_size"][i],
-                    "imdims": [label["height"][i], label["width"][i]],
-                },
+                truth_batch["imdims"][i],
                 ransac=True,
                 reduce_mean=False,
             )
 
-            error_batch[i] = utils.pose.geodesic_error(r_vec, label["pose"][i].numpy())
+            error_batch[i] = utils.pose.geodesic_error(
+                r_vec, truth_batch["pose"][i].numpy()
+            )
 
         return error_batch
 
@@ -75,33 +80,36 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         errs_pose_flip = []
         errs_position = []
         for image_batch, truth_batch in self.real_image_dataset:
-            truth_batch = [
-                dict(zip(truth_batch.keys(), t)) for t in zip(*truth_batch.values())
-            ]
             kps_batch = self.model.predict(image_batch)
             kps_batch = utils.model.decode_displacement_field(kps_batch)
-            kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
-            for image, kps, truth in zip(image_batch, kps_batch.numpy(), truth_batch):
-                image = tf.cast(image * 127.5 + 127.5, tf.uint8).numpy()
+            kps_batch_uncropped = (
+                kps_batch
+                / 2
+                * truth_batch["bbox_size"][
+                    :,
+                    None,
+                    None,
+                    None,
+                ]
+                + truth_batch["centroid"][:, None, None, :]
+            )
+            for i, kps in enumerate(kps_batch_uncropped.numpy()):
                 r_vec, t_vec = utils.pose.solve_pose(
                     self.ref_points,
                     kps,
-                    [truth["focal_length"], truth["focal_length"]],
-                    image.shape[:2],
-                    extra_crop_params={
-                        "centroid": truth["centroid"],
-                        "bbox_size": truth["bbox_size"],
-                        "imdims": truth["imdims"],
-                    },
+                    [truth_batch["focal_length"][i], truth_batch["focal_length"][i]],
+                    truth_batch["imdims"][i],
                     ransac=True,
                     reduce_mean=False,
                 )
-                errs_pose.append(utils.pose.geodesic_error(r_vec, truth["pose"]))
+                errs_pose.append(
+                    utils.pose.geodesic_error(r_vec, truth_batch["pose"][i])
+                )
                 errs_pose_flip.append(
-                    utils.pose.geodesic_error(r_vec, truth["pose"], flip=True)
+                    utils.pose.geodesic_error(r_vec, truth_batch["pose"][i], flip=True)
                 )
                 errs_position.append(
-                    utils.pose.position_error(t_vec, truth["position"])[1]
+                    utils.pose.position_error(t_vec, truth_batch["position"][i])[1]
                 )
         err_pose = np.degrees(np.mean(errs_pose))
         err_pose_flip = np.degrees(np.mean(errs_pose_flip))
@@ -404,7 +412,8 @@ class KeypointsModel:
                     model_path, monitor="val_loss", save_best_only=True, mode="min"
                 ),
                 tf.keras.callbacks.ModelCheckpoint(
-                    model_path_latest, save_best_only=False,
+                    model_path_latest,
+                    save_best_only=False,
                 ),
                 tf.keras.callbacks.LearningRateScheduler(schedule),
                 pose_error_callback,

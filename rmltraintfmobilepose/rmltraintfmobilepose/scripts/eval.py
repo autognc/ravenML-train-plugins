@@ -85,31 +85,42 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
     num_inliers = []
     bbox_sizes = []
     for image_batch, truth_batch in tqdm.tqdm(data):
-        truth_batch = [
-            dict(zip(truth_batch.keys(), t)) for t in zip(*truth_batch.values())
-        ]
         kps_batch = model.predict(image_batch)
         kps_batch = utils.model.decode_displacement_field(kps_batch)
-        kps_batch = kps_batch * (crop_size // 2) + (crop_size // 2)
-        for image, kps, truth in zip(image_batch, kps_batch.numpy(), truth_batch):
-            fls.append(truth["focal_length"])
-            bbox_sizes.append(truth["bbox_size"])
+        kps_batch_cropped = kps_batch * (crop_size // 2) + (crop_size // 2)
+        kps_batch_uncropped = (
+            kps_batch
+            / 2
+            * truth_batch["bbox_size"][
+                :,
+                None,
+                None,
+                None,
+            ]
+            + truth_batch["centroid"][:, None, None, :]
+        )
+        for i, (image, kps_cropped, kps_uncropped) in enumerate(
+            zip(image_batch, kps_batch_cropped.numpy(), kps_batch_uncropped.numpy())
+        ):
+            fls.append(truth_batch["focal_length"][i])
+            bbox_sizes.append(truth_batch["bbox_size"][i])
 
-            kps_uncropped = (kps - (crop_size // 2)) / crop_size * truth[
-                "bbox_size"
-            ] + truth["centroid"]
             r_vec, t_vec, inliers = utils.pose.solve_pose(
                 ref_points,
-                kps_uncropped.numpy(),
-                [truth["focal_length"], truth["focal_length"]],
-                truth["imdims"],
+                kps_uncropped,
+                [truth_batch["focal_length"][i], truth_batch["focal_length"][i]],
+                truth_batch["imdims"][i],
                 ransac=True,
                 reduce_mean=False,
                 return_inliers=True,
             )
             num_inliers.append(inliers)
-            errs_rot.append(utils.pose.geodesic_error(r_vec, truth["pose"], flip=flip))
-            errs_pos.append(utils.pose.position_error(t_vec, truth["position"]))
+            errs_rot.append(
+                utils.pose.geodesic_error(r_vec, truth_batch["pose"][i], flip=flip)
+            )
+            errs_pos.append(
+                utils.pose.position_error(t_vec, truth_batch["position"][i])
+            )
 
             # if "keypoints" in truth:
             #     kps_true = (truth["keypoints"] - truth["centroid"]) / truth[
@@ -120,7 +131,7 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
             #         [np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps, kps_true)]
             #     )
 
-            kps_by_kp = kps.reshape(-1, nb_keypoints, 2).transpose([1, 0, 2])
+            kps_by_kp = kps_cropped.reshape(-1, nb_keypoints, 2).transpose([1, 0, 2])
             stdevs.append(
                 np.linalg.norm(
                     kps_by_kp - kps_by_kp.mean(axis=1, keepdims=True), axis=2
@@ -130,17 +141,17 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
             if render:
                 image = tf.cast(image * 127.5 + 127.5, tf.uint8).numpy()
                 utils.vis.vis_keypoints(
-                    image, kps, err_rot=errs_rot[-1], err_pos=errs_pos[-1][1]
+                    image, kps_cropped, err_rot=errs_rot[-1], err_pos=errs_pos[-1][1]
                 )
                 cv2.imwrite(
-                    os.path.join(render, f"{truth['image_id']}.png"),
+                    os.path.join(render, f"{truth_batch['image_id'][i]}.png"),
                     cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
                 )
 
             result = {
-                "rotation": truth["pose"],
-                "translation": truth["position"],
-                "keypoints": truth["keypoints"],
+                "rotation": truth_batch["pose"][i],
+                "translation": truth_batch["position"][i],
+                # "keypoints": truth_batch["keypoints"][i],
                 "detected_rotation": utils.pose.to_rotation(r_vec).as_quat()[
                     [3, 0, 1, 2]
                 ],
