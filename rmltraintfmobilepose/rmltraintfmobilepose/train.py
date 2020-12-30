@@ -61,7 +61,7 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
                 self.ref_points,
                 kps,
                 [self.focal_length, self.focal_length],
-                truth_batch["imdims"][i],
+                [truth_batch["height"][i], truth_batch["width"][i]],
                 ransac=True,
                 reduce_mean=False,
             )
