@@ -59,21 +59,7 @@ class NumpyMaskProjector(MaskGenerator):
 
     def make_binary_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
         imdims = np.array(image.shape[:2])
-        original_imdims = np.array(extra_crop_params["imdims"])
-        origin = (
-            np.array(extra_crop_params["centroid"]) - extra_crop_params["bbox_size"] / 2
-        )
-        center = original_imdims / 2 - origin
-        focal_length *= imdims / extra_crop_params["bbox_size"]
-        center *= imdims / extra_crop_params["bbox_size"]
-        cam_matrix = np.array(
-            [[focal_length[1], 0, center[1]], [0, focal_length[0], center[0]], [0, 0, 1]],
-            dtype=np.float32,
-        )
-        rot_matrix = Rotation.from_rotvec(r_vec.reshape((3,))).as_matrix()
-        proj = cam_matrix @ np.hstack([rot_matrix, t_vec]) @ self.all_kps_homo
-        coords = ((proj / proj[2])[:2].T).astype(np.uint8)
-        coords = np.clip(coords, 0, self.size - 1)
+        coords = _project_adjusted(r_vec, t_vec, self.size, imdims, self.all_kps_homo, focal_length, extra_crop_params)
         img = np.zeros((self.size, self.size))
         img[coords[:, 1], coords[:, 0]] = 1
         img = cv2.dilate(img, (4, 4), iterations=self.dilate_iters)
@@ -98,10 +84,25 @@ def create_model_mobilenetv2_imagenet_mse(input_shape):
     return full_model
 
 
+def create_model_mobilenetv2_fresh_mse(input_shape):
+    model = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape,
+        include_top=True,
+        weights=None
+    )
+    new_input = model.input
+    feat_out = model.layers[-2].output
+    out = tf.keras.layers.Dense(1, activation="linear")(feat_out)
+    full_model = tf.keras.models.Model(new_input, out)
+    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
+    return full_model
+
+
 # Several possible cullnet models
 #   name: model_generator_function
 cull_models = {
-    "mobilenetv2_imagenet_mse": create_model_mobilenetv2_imagenet_mse
+    "mobilenetv2_imagenet_mse": create_model_mobilenetv2_imagenet_mse,
+    "mobilenetv2_fresh_mse": create_model_mobilenetv2_fresh_mse
 }
 
 
@@ -174,6 +175,10 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
     model.compile(
         optimizer=tf.keras.optimizers.SGD(), loss=lambda _: 0,
     )
+    keypoints_path = (
+        keypoints if keypoints else os.path.join(directory, "keypoints.npy")
+    )
+    ref_points = np.load(keypoints_path).reshape((-1, 3))
     error_func, error_norm, error_denorm = cull_error_metrics[error_metric]
 
     if not cache or not os.path.exists('cull-masks.' + cache):
@@ -184,7 +189,7 @@ def main(model_path, directory, keypoints, focal_length, error_metric, mask_mode
             mask_gen = mask_gen_init(np.load("keypoints700k.npy"), size=224)
         else:
             mask_gen = mask_gen_init(size=224)
-        X, y = compute_model_error_training_data(model, directory, keypoints, focal_length, error_func, mask_gen)
+        X, y = compute_model_error_training_data(model, directory, ref_points, focal_length, error_func, mask_gen)
         if cache:
             np.save('cull-masks.' + cache, X)
             np.save('cull-errors.' + cache, y)
@@ -268,15 +273,43 @@ def train_model(model_name, model, X_train, y_train, X_test, y_test):
     return tf.keras.models.load_model(save_name)
 
 
-def compute_model_error_training_data(model, directory, keypoints, focal_length, error_func, mask_gen):
+def derive_keypoints(truth, ref_points, focal_length):
+    r_vec = utils.pose.to_rotation(truth["pose"]).as_rotvec()
+    t_vec = truth["position"].numpy()
+    imdims = truth["imdims"]
+    cam_matrix = np.array(
+        [[focal_length, 0, imdims[1] // 2], [0, focal_length, imdims[0] // 2], [0, 0, 1]],
+        dtype=np.float32,
+    )
+    kps = cv2.projectPoints(ref_points, r_vec, t_vec, cam_matrix, None)[0][
+        :, :, ::-1
+    ].squeeze()
+    return kps
+
+
+def _project_adjusted(r_vec, t_vec, size, imdims, all_kps_homo, focal_length, extra_crop_params):
+    original_imdims = np.array(extra_crop_params["imdims"])
+    origin = (
+        np.array(extra_crop_params["centroid"]) - extra_crop_params["bbox_size"] / 2
+    )
+    center = original_imdims / 2 - origin
+    focal_length *= imdims / extra_crop_params["bbox_size"]
+    center *= imdims / extra_crop_params["bbox_size"]
+    cam_matrix = np.array(
+        [[focal_length[1], 0, center[1]], [0, focal_length[0], center[0]], [0, 0, 1]],
+        dtype=np.float32,
+    )
+    rot_matrix = Rotation.from_rotvec(r_vec.reshape((3,))).as_matrix()
+    proj = cam_matrix @ np.hstack([rot_matrix, t_vec]) @ all_kps_homo
+    coords = ((proj / proj[2])[:2].T).astype(np.uint8)
+    return np.clip(coords, 0, size - 1)
+
+
+def compute_model_error_training_data(model, directory, ref_points, focal_length, error_func, mask_gen):
 
     nb_keypoints = model.output.shape[-1] // 2
     cropsize = model.input.shape[1]
-
-    keypoints_path = (
-        keypoints if keypoints else os.path.join(directory, "keypoints.npy")
-    )
-    ref_points = np.load(keypoints_path).reshape((-1, 3))[:nb_keypoints]
+    ref_points = ref_points[:nb_keypoints]
 
     data = utils.data.dataset_from_directory(
         directory, cropsize, nb_keypoints=nb_keypoints
@@ -295,14 +328,18 @@ def compute_model_error_training_data(model, directory, keypoints, focal_length,
         kps_batch = kps_batch * (cropsize // 2) + (cropsize // 2)
         for image, kps, truth in zip(image_batch, kps_batch.numpy(), truth_batch):
             image = image.numpy()
-            kps_true = (truth["keypoints"] - truth["centroid"]) / truth[
-                "bbox_size"
-            ] * cropsize + (cropsize // 2)
             extra_crop_params = {
                 "centroid": truth["centroid"],
                 "bbox_size": truth["bbox_size"],
                 "imdims": truth["imdims"],
             }
+            if "keypoints" not in truth:
+                unscaled_kps = derive_keypoints(truth, ref_points, focal_length)
+            else:
+                unscaled_kps = truth["keypoints"]
+            kps_true = (unscaled_kps - truth["centroid"]) / truth[
+                "bbox_size"
+            ] * cropsize + (cropsize // 2)
             r_vec, t_vec = utils.pose.solve_pose(
                 ref_points,
                 kps,
