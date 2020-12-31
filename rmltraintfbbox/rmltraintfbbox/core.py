@@ -15,6 +15,7 @@ import click
 import io
 import sys
 import shutil
+import subprocess
 import yaml
 import importlib
 import re
@@ -168,24 +169,10 @@ def train(ctx: click.Context, train: TrainInput):
             learning_rate_fn = learning_rate
         else:
             learning_rate_fn = lambda: learning_rate
+
     # create tf.data.Dataset()
-    dist_eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
+    eval_input = inputs.eval_input(eval_config, eval_input_config, model_config, model=detection_model)
 
-    
-    #@tf.function
-    def train_step(detection_model, train_input_iterator, optimizer, learning_rate_fn, global_step, num_replicas):
-
-        features, labels = train_input_iterator.next()
-        loss = model_lib_v2.eager_train_step(detection_model, features,
-                            labels, train_config.unpad_groundtruth_tensors,
-                            optimizer, learning_rate_fn(),
-                            add_regularization_loss=True,
-                            clip_gradients_value=None,
-                            global_step=global_step,
-                            num_replicas=num_replicas)
-        global_step.assign_add(1)
-        return loss
-        
     with strategy.scope():
         # restore from checkpoint
         load_fine_tune_checkpoint(detection_model, train_config.fine_tune_checkpoint,
@@ -271,7 +258,7 @@ def train(ctx: click.Context, train: TrainInput):
                         
             if step % config.get('log_eval_every') == 0:
                 manager.save()
-                eval_metrics = evaluate(dist_eval_input)
+                eval_metrics = evaluate(eval_input)
                 if comet:
                     stack.enter_context(experiment.validate())
                     experiment.log_metrics(eval_metrics, step=step)
@@ -297,41 +284,39 @@ def train(ctx: click.Context, train: TrainInput):
             test_path = str(train.dataset.path / 'test')
             output_path = str(base_dir / 'validation')
             os.mkdir(output_path)
+            extra_files += perform_evaluation(detection_model, 
+                                            test_path, 
+                                            output_path, 
+                                            label_path, 
+                                            experiment)
+            if config.get("evaluate_on"):
+                evals = config.get("evaluate_on")
+                for name in evals.keys():
+                    eval_info = evals[name]
+                    test_path = eval_info.get('path')
+                    if eval_info.get('s3'):
+                        try:
+                            bucket = eval_info['s3'].get('bucket')
+                            # prefix seems to be the term used in rml core 
+                            prefix = eval_info['s3'].get('prefix')
+                            s3_uri = 's3://' + bucket_name + '/' + prefix                           
+                            test_path = os.path.join(base_dir, prefix)
+                            subprocess.call(["aws", "s3", "sync", s3_uri, str(local_path), '--quiet'])
+                        except:
+                            continue
+                    output_path = eval_info.get('output', str(base_dir / f'validation_{name}'))
+                    try:
+                        os.makedirs(output_path)
+                    except Exception:
+                        pass
+                    extra_files += perform_evaluation(detection_model, 
+                                                    test_path, 
+                                                    output_path, 
+                                                    label_path, 
+                                                    experiment,
+                                                    name)
 
-            image_dataset = utils.get_image_dataset(test_path)
-            truth_data = list(utils.gen_truth_data(test_path))
-
-            category_index = label_map_util.create_category_index_from_labelmap(label_path)
-            evaluator = BoundingBoxEvaluator(category_index)
-
-            for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
-                true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
-                start = time.time()
-                output = detection_model.call(tf.expand_dims(image, axis=0))
-                inference_time = time.time() - start
-                evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
-                drawn_img = visualization_utils.draw_bounding_boxes_on_image_tensors(
-                                                tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8),
-                                                output['detection_boxes'],
-                                                tf.cast(output['detection_classes'] + 1, dtype=tf.int32),
-                                                output['detection_scores'],
-                                                category_index,
-                                                max_boxes_to_draw=1,
-                                                min_score_thresh=0)
-                tf.keras.preprocessing.image.save_img(output_path+f'/img{i}.png', drawn_img[0])
-
-            evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
-            if comet:
-                experiment.log_asset(os.path.join(output_path, 'validation_results.pickle'))
-            evaluator.calculate_default_and_save(output_path)
-
-            extra_files.append(os.path.join(output_path, 'stats.json'))
-            extra_files.append(os.path.join(output_path, 'validation_results.pickle'))
-            extra_files += glob.glob(os.path.join(output_path, '*_curve_*.png'))
-            if comet:
-                experiment.log_asset(os.path.join(output_path, 'stats.json'))
-                for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
-                    experiment.log_image(img)
+            
 
     # export detection_model as SavedModel
     saved_model_dir = os.path.join(model_dir, 'export')
@@ -358,6 +343,59 @@ def train(ctx: click.Context, train: TrainInput):
     return result
 
 
+def perform_evaluation(
+                    detection_model, 
+                    test_path, 
+                    output_path, 
+                    label_path, 
+                    experiment=None, 
+                    eval_name=''):
+
+    if eval_name and eval_name[-1] != '_':
+        eval_name += '_'
+
+    image_dataset = utils.get_image_dataset(test_path)
+    truth_data = list(utils.gen_truth_data(test_path))
+    category_index = label_map_util.create_category_index_from_labelmap(label_path)
+    evaluator = BoundingBoxEvaluator(category_index)
+
+    for (i, (bbox, centroid, z)), image in zip(enumerate(truth_data), image_dataset):
+        true_shape = tf.expand_dims(tf.convert_to_tensor(image.shape), axis=0)
+        start = time.time()
+        output = detection_model.call(tf.expand_dims(image, axis=0))
+        inference_time = time.time() - start
+        evaluator.add_single_result(output, true_shape, inference_time, bbox, centroid)
+        drawn_img = visualization_utils.draw_bounding_boxes_on_image_tensors(
+                                        tf.cast(tf.expand_dims(image, axis=0), dtype=tf.uint8),
+                                        output['detection_boxes'],
+                                        tf.cast(output['detection_classes'] + 1, dtype=tf.int32),
+                                        output['detection_scores'],
+                                        category_index,
+                                        max_boxes_to_draw=1,
+                                        min_score_thresh=0)
+        tf.keras.preprocessing.image.save_img(output_path+f'/img{i}.png', drawn_img[0])
+
+    evaluator.dump(os.path.join(output_path, 'validation_results.pickle'))
+    if experiment is not None:
+        experiment.log_asset(os.path.join(output_path,  'validation_results.pickle'), file_name=eval_name+'validation_results.pickle')
+    evaluator.calculate_default_and_save(output_path)
+
+    extra_files.append(os.path.join(output_path, 'stats.json'))
+    extra_files.append(os.path.join(output_path, 'validation_results.pickle'))
+    extra_files += glob.glob(os.path.join(output_path, '*_curve_*.png'))
+    if experiment is not None:
+        experiment.log_asset(os.path.join(output_path, 'stats.json'), file_name=eval_name+'stats.json')
+        for img in glob.glob(os.path.join(output_path, '*_curve_*.png')):
+            experiment.log_image(img, name=(eval_name + str(os.path.basename(img))))
+    
+    if eval_name:
+        for i, fp in enumerate(extra_files):
+            dir_name, base_name = os.path.split(fp)
+            new_path = os.path.join(dirname, eval_name + base_name)
+            shutil.move(fp, new_path)
+            extra_files[i] = new_path
+    
+    return extra_files
 ### HELPERS ###
 
 def load_fine_tune_checkpoint(
