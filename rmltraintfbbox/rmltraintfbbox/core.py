@@ -293,15 +293,16 @@ def train(ctx: click.Context, train: TrainInput):
                 evals = config.get("evaluate_on")
                 for name in evals.keys():
                     eval_info = evals[name]
+                    print(eval_info)
                     test_path = eval_info.get('path')
                     if eval_info.get('s3'):
                         try:
                             bucket = eval_info['s3'].get('bucket')
                             # prefix seems to be the term used in rml core 
                             prefix = eval_info['s3'].get('prefix')
-                            s3_uri = 's3://' + bucket_name + '/' + prefix                           
+                            s3_uri = 's3://' + bucket + '/' + prefix                           
                             test_path = os.path.join(base_dir, prefix)
-                            subprocess.call(["aws", "s3", "sync", s3_uri, str(local_path), '--quiet'])
+                            subprocess.call(["aws", "s3", "sync", s3_uri, str(test_path), '--quiet'])
                         except:
                             continue
                     output_path = eval_info.get('output', str(base_dir / f'validation_{name}'))
@@ -309,12 +310,13 @@ def train(ctx: click.Context, train: TrainInput):
                         os.makedirs(output_path)
                     except Exception:
                         pass
-                    extra_files += perform_evaluation(detection_model, 
-                                                    test_path, 
-                                                    output_path, 
-                                                    label_path, 
-                                                    experiment,
-                                                    name)
+                    if len(glob.glob(os.path.join(test_path,'*.json'))):
+                        extra_files += perform_evaluation(detection_model, 
+                                                        test_path, 
+                                                        output_path, 
+                                                        label_path, 
+                                                        experiment,
+                                                        name)
 
             
 
@@ -353,7 +355,7 @@ def perform_evaluation(
 
     if eval_name and eval_name[-1] != '_':
         eval_name += '_'
-
+    extra_files = []
     image_dataset = utils.get_image_dataset(test_path)
     truth_data = list(utils.gen_truth_data(test_path))
     category_index = label_map_util.create_category_index_from_labelmap(label_path)
@@ -391,7 +393,7 @@ def perform_evaluation(
     if eval_name:
         for i, fp in enumerate(extra_files):
             dir_name, base_name = os.path.split(fp)
-            new_path = os.path.join(dirname, eval_name + base_name)
+            new_path = os.path.join(dir_name, eval_name + base_name)
             shutil.move(fp, new_path)
             extra_files[i] = new_path
     
