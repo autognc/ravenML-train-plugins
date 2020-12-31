@@ -24,6 +24,7 @@ def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=
 
     def parse(metadata, img_id):
         parsed = {
+            # TODO don't hardcode key, maybe
             "bbox": metadata["bboxes"]["cygnus"],
             "pose": metadata["pose"],
             "translation": metadata["translation"],
@@ -58,7 +59,6 @@ def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=
 
     def process(image_file, metadata):
         # load bounding box
-        # TODO don't hardcode key, maybe
         bbox = metadata["bbox"]
         xmin = bbox["xmin"]
         xmax = bbox["xmax"]

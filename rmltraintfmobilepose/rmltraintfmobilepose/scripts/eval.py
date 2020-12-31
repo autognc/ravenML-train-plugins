@@ -144,7 +144,10 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
                     image, kps_cropped, err_rot=errs_rot[-1], err_pos=errs_pos[-1][1]
                 )
                 cv2.imwrite(
-                    os.path.join(render, f"{truth_batch['image_id'][i]}.png"),
+                    os.path.join(
+                        render,
+                        f"{truth_batch['image_id'][i].numpy().decode('utf-8')}.png",
+                    ),
                     cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
                 )
 
