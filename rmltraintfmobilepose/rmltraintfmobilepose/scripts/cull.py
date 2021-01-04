@@ -148,7 +148,12 @@ cull_mask_generators = {
     help='Path to 3D reference points .npy file (optional). Defaults to "{directory}/keypoints.npy"',
     type=click.Path(exists=True, dir_okay=False),
 )
-@click.option("-f", "--focal_length", type=float, required=True)
+@click.option(
+    "-f",
+    "--focal_length",
+    type=float,
+    help="Focal length (in pixels). Overrides focal length from truth data. Required if the truth data does not have focal length information.",
+)
 @click.option(
     "-e", 
     "--error_metric", 
@@ -273,10 +278,11 @@ def train_model(model_name, model, X_train, y_train, X_test, y_test):
     return tf.keras.models.load_model(save_name)
 
 
-def derive_keypoints(truth, ref_points, focal_length):
+def derive_keypoints(truth, ref_points):
     r_vec = utils.pose.to_rotation(truth["pose"]).as_rotvec()
     t_vec = truth["position"].numpy()
     imdims = truth["imdims"]
+    focal_length = truth["focal_length"]
     cam_matrix = np.array(
         [[focal_length, 0, imdims[1] // 2], [0, focal_length, imdims[0] // 2], [0, 0, 1]],
         dtype=np.float32,
@@ -305,14 +311,14 @@ def _project_adjusted(r_vec, t_vec, size, imdims, all_kps_homo, focal_length, ex
     return np.clip(coords, 0, size - 1)
 
 
-def compute_model_error_training_data(model, directory, ref_points, focal_length, error_func, mask_gen):
+def compute_model_error_training_data(model, directory, ref_points, default_focal_length, error_func, mask_gen):
 
     nb_keypoints = model.output.shape[-1] // 2
     cropsize = model.input.shape[1]
     ref_points = ref_points[:nb_keypoints]
 
     data = utils.data.dataset_from_directory(
-        directory, cropsize, nb_keypoints=nb_keypoints
+        directory, cropsize, nb_keypoints=nb_keypoints, focal_length=default_focal_length
     )
     data = data.batch(32)
 
@@ -334,7 +340,7 @@ def compute_model_error_training_data(model, directory, ref_points, focal_length
                 "imdims": truth["imdims"],
             }
             if "keypoints" not in truth:
-                unscaled_kps = derive_keypoints(truth, ref_points, focal_length)
+                unscaled_kps = derive_keypoints(truth, ref_points)
             else:
                 unscaled_kps = truth["keypoints"]
             kps_true = (unscaled_kps - truth["centroid"]) / truth[
@@ -343,13 +349,13 @@ def compute_model_error_training_data(model, directory, ref_points, focal_length
             r_vec, t_vec = utils.pose.solve_pose(
                 ref_points,
                 kps,
-                [focal_length, focal_length],
+                [truth["focal_length"], truth["focal_length"]],
                 image.shape[:2],
                 extra_crop_params=extra_crop_params,
                 ransac=True,
                 reduce_mean=False,
             )
-            img_mask = mask_gen.make_and_apply_mask(image, r_vec, t_vec, focal_length, extra_crop_params)
+            img_mask = mask_gen.make_and_apply_mask(image, r_vec, t_vec, truth["focal_length"], extra_crop_params)
             inputs.append(img_mask)
             error = error_func(kps, kps_true, r_vec, t_vec, truth["pose"], truth["position"])
             outputs.append(error)
