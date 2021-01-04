@@ -38,14 +38,14 @@ def get_num_classes(label_path):
 def process_directory(exportdir, 
                     labelmap, 
                     directory, 
-                    output,
+                    outputdir,
                     eval_name, 
                     num=None, 
                     vis=False, 
-                    gaussian-noise=0.0, 
+                    gaussian_noise=0.0, 
                     rescale=1.0):
     
-    mkdir(output)
+    mkdir(outputdir)
     image_dataset = utils.get_image_dataset(directory, rescale=rescale, gaussian_stddev=gaussian_noise)
     truth_data = list(utils.gen_truth_data(directory, rescale=rescale))
 
@@ -71,15 +71,15 @@ def process_directory(exportdir,
                                         use_normalized_coordinates=True)
             tf.keras.preprocessing.image.save_img(output+f'/img{i}.png', drawn_img[0])
 
-    evaluator.dump(os.path.join(output, 'validation_results.pickle'))
-    evaluator.calculate_default_and_save(output)
+    evaluator.dump(os.path.join(outputdir, 'validation_results.pickle'))
+    evaluator.calculate_default_and_save(outputdir)
 
 def prep_model(base_dir, bucket, uuid):
     try: 
         model_path = os.path.join(base_dir, uuid, 'export.zip')
         s3_uri = 's3://' + bucket + '/extras/' + uuid + '/export.zip'                           
         subprocess.call(["aws", "s3", "cp", s3_uri, str(model_path), '--quiet'])
-        shutil.unpack_archive(model_path)
+        shutil.unpack_archive(model_path, os.path.join(base_dir, uuid))
         return os.path.join(base_dir, uuid, 'export')
     except:
         return False
@@ -114,17 +114,17 @@ def main():
     imagesets = [ imgset for imgset in imagesets if get_imageset(base_dir, imageset_bucket, imgset)]
     for model in models:
         exportdir = prep_model(base_dir, model_bucket, model)
-        if not model_path:
+        if not exportdir:
             continue
-        for imgset in imageset:
+        for imgset in imagesets:
             outputdir = os.path.join(base_dir, model, imgset)
             process_directory(exportdir, 
                             labelmap, 
-                            imgset, 
+                            os.path.join(base_dir, imgset), 
                             outputdir,
                             imgset, 
                             vis=viz)
-                                )
+                                
             
 if __name__ == "__main__":
     main()
