@@ -40,6 +40,11 @@ class MaskGenerator:
             image, r_vec, t_vec, focal_length, extra_crop_params
         )
         assert mask.shape[:2] == image.shape[:2]
+        # code for spot-checking masks
+        # cv2.imshow("asdf", (image * 127.5 + 127.5).astype(np.uint8))
+        # cv2.waitKey(0)
+        # cv2.imshow("asdf", (mask * 255).astype(np.uint8))
+        # cv2.waitKey(0)
         if self.stack:
             w, h, c = image.shape
             assert c == 3
@@ -155,9 +160,12 @@ class OpenGLMaskProjector(MaskGenerator):
         self.prog["translation"] = tuple(t_vec)
         self.fbo.clear(0.0, 0.0, 0.0, 1.0)
         self.vao.render(moderngl.TRIANGLES)
-        return np.frombuffer(self.fbo.read(), dtype=np.uint8).reshape(
-            self.size, self.size, 3
-        )[:, :, 0]
+        return (
+            np.frombuffer(self.fbo.read(), dtype=np.uint8).reshape(
+                self.size, self.size, 3
+            )[:, :, 0]
+            / 255
+        )
 
 
 def create_model_mobilenetv2_imagenet_mse(input_shape):
@@ -205,7 +213,7 @@ cull_models = {
 cull_error_metrics = {
     "keypoint_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: np.mean(
-            [np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps_pred, kps_true)]
+            np.linalg.norm(kps_pred - kps_true, axis=-1)
         ),
         lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3.5, 3.5),
         lambda ynorm: np.exp(ynorm * 0.1731 + 5.935),
