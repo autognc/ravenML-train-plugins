@@ -19,12 +19,21 @@ import tensorflow as tf
 import numpy as np
 import moderngl
 import click
+import glob
+import json
 import time
+import tempfile
 import tqdm
 import cv2
 import os
 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
 from .. import utils
+
+np.set_printoptions(suppress=True)
 
 
 class MaskGenerator:
@@ -32,13 +41,13 @@ class MaskGenerator:
         self.stack = stack
         self.size = size
 
-    def make_binary_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
+    def make_binary_mask(self, image, r_vec, t_vec, focal_length, centroid, bbox_size, imdims):
         raise NotImplementedError()
 
-    def make_and_apply_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
-        mask = self.make_binary_mask(
-            image, r_vec, t_vec, focal_length, extra_crop_params
-        )
+    def make_and_apply_mask(self, image, *args, **kwargs):
+        # start = time.time()
+        mask = self.make_binary_mask(image, *args, **kwargs)
+        # print(time.time() - start)
         assert mask.shape[:2] == image.shape[:2]
         # code for spot-checking masks
         # cv2.imshow("asdf", (image * 127.5 + 127.5).astype(np.uint8))
@@ -46,42 +55,19 @@ class MaskGenerator:
         # cv2.imshow("asdf", (mask * 255).astype(np.uint8))
         # cv2.waitKey(0)
         if self.stack:
-            w, h, c = image.shape
-            assert c == 3
-            image_and_mask = np.empty((w, h, c + 1))
-            image_and_mask[:, :, :3] = image
+            image_and_mask = np.concatenate([image, mask[..., None]], axis=-1)
+            # w, h, c = image.shape
+            # assert c == 3
+            # image_and_mask = np.empty((w, h, c + 1), dtype=np.float32)
+            # image_and_mask[:, :, :3] = image
             # mask is [0, 1]
-            image_and_mask[:, :, 3] = mask * 1
+            # image_and_mask[:, :, 3] = mask * 1
         else:
             image_and_mask = image.copy()
             # -1 dependent on how image is encoded
-            image_and_mask[np.where(mask == 0)] = [-1, -1, -1]
+            image_and_mask[np.where(mask == 0)] = [0, 0, 0]
         return image_and_mask
 
-
-class NumpyMaskProjector(MaskGenerator):
-    def __init__(self, all_model_keypoints, dilate_iters=2, **kwargs):
-        super().__init__(**kwargs)
-        self.dilate_iters = dilate_iters
-        self.all_kps_homo = np.hstack(
-            [all_model_keypoints, np.ones((len(all_model_keypoints), 1))]
-        ).T
-
-    def make_binary_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
-        imdims = np.array(image.shape[:2])
-        coords = _project_adjusted(
-            r_vec,
-            t_vec,
-            self.size,
-            imdims,
-            self.all_kps_homo,
-            focal_length,
-            extra_crop_params,
-        )
-        img = np.zeros((self.size, self.size))
-        img[coords[:, 1], coords[:, 0]] = 1
-        img = cv2.dilate(img, (4, 4), iterations=self.dilate_iters)
-        return img
 
 
 class OpenGLMaskProjector(MaskGenerator):
@@ -137,13 +123,11 @@ class OpenGLMaskProjector(MaskGenerator):
         self.fbo = ctx.simple_framebuffer((self.size, self.size))
         self.fbo.use()
 
-    def make_binary_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
-        origin = (
-            np.array(extra_crop_params["centroid"]) - extra_crop_params["bbox_size"] / 2
-        )
-        center = np.array(extra_crop_params["imdims"]) / 2 - origin
-        focal_length *= self.size / extra_crop_params["bbox_size"]
-        center *= self.size / extra_crop_params["bbox_size"]
+    def make_binary_mask(self, image, r_vec, t_vec, focal_length, centroid, bbox_size, imdims):
+        origin = centroid - bbox_size / 2
+        center = imdims / 2 - origin
+        focal_length *= self.size / bbox_size
+        center *= self.size / bbox_size
         cam_matrix = np.array(
             [
                 [focal_length, 0, center[1]],
@@ -157,46 +141,76 @@ class OpenGLMaskProjector(MaskGenerator):
         self.prog["rotation"] = tuple(
             Rotation.from_rotvec(r_vec.squeeze()).as_matrix().T.flatten()
         )
-        self.prog["translation"] = tuple(t_vec)
+        self.prog["translation"] = tuple(t_vec.squeeze())
         self.fbo.clear(0.0, 0.0, 0.0, 1.0)
         self.vao.render(moderngl.TRIANGLES)
         return (
             np.frombuffer(self.fbo.read(), dtype=np.uint8).reshape(
                 self.size, self.size, 3
             )[:, :, 0]
-            / 255
         )
 
 
-def create_model_mobilenetv2_imagenet_mse(input_shape):
+def create_model_mobilenetv2_imagenet_mse():
     assert (
         input_shape[-1] == 3
     ), "Using this model requires cut mask generation for 3-channel input data"
     model = tf.keras.applications.MobileNetV2(
-        input_shape=input_shape,
-        include_top=True,
+        input_shape=(224, 224, 3),
+        include_top=False,
+        pooling="max",
         weights="imagenet",
-        # These are ignored, but required to load weights
-        classes=1000,
-        classifier_activation="softmax",
+        # alpha=0.35,
     )
     new_input = model.input
-    feat_out = model.layers[-2].output
+    feat_out = model.output
+    # feat_out = model.get_layer("block_2_add").output
+    # feat_out = tf.keras.layers.GlobalMaxPooling2D()(feat_out)
+    # feat_out = tf.keras.layers.Dropout(0.5)(feat_out)
     out = tf.keras.layers.Dense(1, activation="linear")(feat_out)
-    full_model = tf.keras.models.Model(new_input, out)
-    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
-    return full_model
+    model = tf.keras.models.Model(new_input, out)
+    # model.trainable = True
+    # regularizer = tf.keras.regularizers.l2(0.001)
+    # for layer in model.layers:
+        # for attr in ['kernel_regularizer']:
+            # if hasattr(layer, attr):
+                # setattr(layer, attr, regularizer)
+
+    # When we change the layers attributes, the change only happens in the model config file
+    # model_json = model.to_json()
+
+    # Save the weights before reloading the model.
+    # tmp_weights_path = os.path.join(tempfile.gettempdir(), 'tmp_weights.h5')
+    # model.save_weights(tmp_weights_path)
+
+    # load the model from the config
+    # model = tf.keras.models.model_from_json(model_json)
+    
+    # Reload the model weights
+    # model.load_weights(tmp_weights_path, by_name=True)
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(0.0001), loss="mse", metrics=[tf.keras.metrics.MeanSquaredError()])
+    print(model.summary())
+    return model
 
 
-def create_model_mobilenetv2_fresh_mse(input_shape):
+def create_model_mobilenetv2_fresh_mse():
+    weights_model = tf.keras.applications.MobileNetV2(
+        input_shape=(224, 224, 3), include_top=False, weights="imagenet", pooling="max", alpha=0.5
+    )
     model = tf.keras.applications.MobileNetV2(
-        input_shape=input_shape, include_top=True, weights=None
+        input_shape=(224, 224, 4), include_top=False, weights=None, pooling="max", alpha=0.5
     )
+    for i in range(3, len(model.layers)):
+        model.layers[i].set_weights(weights_model.layers[i].get_weights())
+        model.layers[i].trainable = False
     new_input = model.input
-    feat_out = model.layers[-2].output
+    feat_out = model.output
     out = tf.keras.layers.Dense(1, activation="linear")(feat_out)
     full_model = tf.keras.models.Model(new_input, out)
-    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
+    full_model.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss="mse", metrics=[])
+    print(full_model.summary())
+    del weights_model
     return full_model
 
 
@@ -207,16 +221,24 @@ cull_models = {
     "mobilenetv2_fresh_mse": create_model_mobilenetv2_fresh_mse,
 }
 
+def conf(kps_pred, kps_true, alpha=2.0, threshold=30):
+    dists = np.linalg.norm(kps_pred - kps_true, axis=-1)  # shape (196, 20)
+    dists = np.clip(dists, 0, threshold)
+    res = (np.exp(alpha * (1 - dists / threshold)) - 1) / (np.exp(alpha) - 1)
+    return res
+
 
 # Several possible error metrics
 #   name: (error_calc_function, normalize, denormalize)
 cull_error_metrics = {
     "keypoint_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: np.mean(
-            np.linalg.norm(kps_pred - kps_true, axis=-1)
+            conf(kps_pred, kps_true)
         ),
-        lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3.5, 3.5),
-        lambda ynorm: np.exp(ynorm * 0.1731 + 5.935),
+        lambda y: y,
+        lambda ynorm: ynorm,
+        # lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3.5, 3.5),
+        # lambda ynorm: np.exp(ynorm * 0.1731 + 5.935),
     ),
     "geodesic_rotation": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: utils.pose.geodesic_error(
@@ -228,13 +250,31 @@ cull_error_metrics = {
     "position_l2": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: utils.pose.position_error(
             t_vec, position_true
-        )[
-            0
-        ],
+        ),
         lambda y: y,  # TODO
         lambda ynorm: ynorm,
     ),
 }
+
+def reprojection_confidence(r_vec, t_vec, output, cropsize, ref_points):
+    unscaled_kps = derive_keypoints(r_vec, t_vec, output["imdims"], output["focal_length"], ref_points)
+    kps_reproj = (unscaled_kps - output["centroid"]) / output[
+        "bbox_size"
+    ] * cropsize + (cropsize // 2)
+    # kps_reproj = _project_adjusted(
+            # r_vec,
+            # t_vec,
+            # cropsize,
+            # ref_points,
+            # output["focal_length"],
+            # output["centroid"],
+            # output["bbox_size"],
+            # output["imdims"]
+    # )
+    y = np.linalg.norm(kps_reproj - output["kps_true"], axis=-1)
+    return np.mean(np.log(1 + y) / 2.5 - 1)
+    # return np.mean(conf(kps_reproj, output["kps_true"]))
+    
 
 
 # Several possible mask encodings
@@ -260,7 +300,7 @@ cull_mask_generators = {
 
 
 @click.command(help="Train/Use CullNet")
-@click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("model_path", type=click.Path(exists=True, file_okay=False))
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
 @click.option(
     "-k",
@@ -273,12 +313,6 @@ cull_mask_generators = {
     "--focal_length",
     type=float,
     help="Focal length (in pixels). Overrides focal length from truth data. Required if the truth data does not have focal length information.",
-)
-@click.option(
-    "-e",
-    "--error_metric",
-    type=click.Choice(cull_error_metrics.keys(), case_sensitive=False),
-    default=next(iter(cull_error_metrics)),
 )
 @click.option(
     "-k",
@@ -296,78 +330,83 @@ cull_mask_generators = {
     "-t", "--eval_trained_cull_model", type=click.Path(exists=True, dir_okay=False)
 )
 @click.option(
-    "-c", "--cache", help="Cache dataset here", type=click.Path(dir_okay=False)
+    "-tt", "--continue_training", type=click.Path(exists=True, dir_okay=False)
 )
 def main(
     model_path,
     directory,
     keypoints,
     focal_length,
-    error_metric,
     mask_mode,
     model_type,
     eval_trained_cull_model,
-    cache,
+    continue_training,
 ):
 
-    model = tf.keras.models.load_model(model_path, compile=False)
+    model = tf.saved_model.load(model_path)
     keypoints_path = (
         keypoints if keypoints else os.path.join(directory, "keypoints.npy")
     )
     ref_points = np.load(keypoints_path).reshape((-1, 3))
-    error_func, error_norm, error_denorm = cull_error_metrics[error_metric]
+    nb_keypoints = model.signatures["serving_default"].outputs[0].shape[1]
+    ref_points = ref_points[:nb_keypoints]
 
-    if not cache or not os.path.exists("cull-masks." + cache):
-        print("Using", model_path, "to generate cullnet training data...")
-        mask_gen_init = cull_mask_generators[mask_mode]
-        # TODO make hardcoded stuff into options
-        if mask_mode.startswith("numpy"):
-            mask_gen = mask_gen_init(
-                np.load("keypoints700k.npy"), size=model.input.shape[1]
-            )
-        else:
-            mask_gen = mask_gen_init("Cygnus_ENHANCED.stl", size=model.input.shape[1])
-        X, y = compute_model_error_training_data(
-            model, directory, ref_points, focal_length, error_func, mask_gen
+    mask_gen_init = cull_mask_generators[mask_mode]
+    # TODO make hardcoded stuff into options
+    if mask_mode.startswith("numpy"):
+        mask_gen = mask_gen_init(
+            np.load("keypoints700k.npy")
         )
-        if cache:
-            np.save("cull-masks." + cache, X)
-            np.save("cull-errors." + cache, y)
     else:
-        print("Using cached data...")
-        X, y = np.load("cull-masks." + cache), np.load("cull-errors." + cache)
-    print("Loaded dataset: ", X.shape, " -> ", y.shape)
+        mask_gen = mask_gen_init("Cygnus_ENHANCED.stl")
 
-    # Ensure error data/labels looks good to feed into the model
-    ynorm = error_norm(y)
-    print("error        mean=", y.mean(), "std=", y.std())
-    print("error (norm) mean=", ynorm.mean(), "std=", ynorm.std())
-    _, (ax, ax2) = plt.subplots(nrows=2)
-    ax.hist(y)
-    ax.set_title("error")
-    ax2.hist(ynorm)
-    ax2.set_title("error (norm)")
-    plt.savefig("cull-error-dist.png")
+    data_path, outputs = compute_model_error_training_data(
+        model, directory, ref_points, focal_length, mask_gen
+    )
+    files = sorted(glob.glob(os.path.join(data_path, "*.png")))
+    dataset = tf.data.Dataset.from_tensor_slices(files)
+    dataset = dataset.map(lambda fn: tf.cast(tf.io.decode_png(tf.io.read_file(fn), channels=4), tf.float32) / 127.5 - 1)
+    # dataset = dataset.map(lambda img: tf.concat([img[..., :3], tf.where(img[..., 3] == -1.0, 0.0, 1.0)[..., None]], axis=-1))
+
+    # for img in dataset:
+        # img = (img.numpy() * 127.5 + 127.5).astype(np.uint8)
+        # cv2.imshow('asdf', img[..., :3])
+        # cv2.waitKey(0)
+        # cv2.imshow('asdf', img[..., 3][..., None])
+        # cv2.waitKey(0)
 
     # Train/Test Shuffle & Split
-    np.random.seed(0)
-    shuffle_idxs = np.random.permutation(len(X))
-    train_size = int(len(X) * 0.7)
-    train_idxs, test_idxs = shuffle_idxs[:train_size], shuffle_idxs[train_size:]
     # these are all normalized
-    X_train, y_train, X_test, y_test = (
-        X[train_idxs],
-        ynorm[train_idxs],
-        X[test_idxs],
-        ynorm[test_idxs],
-    )
 
-    if eval_trained_cull_model is None:
-        print("Training cullnet...", X_train.shape, X_test.shape)
+    y = np.array([reprojection_confidence(output["r_vec"], output["t_vec"], output, 224, ref_points) for output in outputs])
+
+    plt.hist(y, bins=100)
+    plt.savefig("errors.png")
+
+    if eval_trained_cull_model is None or continue_training is not None:
+        np.random.seed(0)
+        train_size = int(len(files) * 0.8)
+        images_train, outputs_train, images_test, outputs_test = (
+                dataset.take(train_size),
+                y[:train_size],
+                dataset.skip(train_size),
+                y[train_size:],
+        )
+        print("Training cullnet...")
+        if continue_training:
+            model_name = (
+                continue_training.replace("\\", "").replace("/", "").replace(":", "")
+            )
+            print("Continuing " + model_name)
+            cull_model = tf.keras.models.load_model(continue_training, compile=False)
+            cull_model.trainable = True
+            cull_model.compile(optimizer=tf.keras.optimizers.Adam(0.0001), loss="mse")
+            cull_model.summary()
+        else:
+            cull_model = cull_models[model_type]()
         model_name = model_type + "-" + str(int(time.time()))
-        cull_model = cull_models[model_type](X.shape[1:])
         cull_model = train_model(
-            model_name, cull_model, X_train, y_train, X_test, y_test
+            model_name, cull_model, images_train, outputs_train, images_test, outputs_test, mask_gen, ref_points
         )
     else:
         print("Using pretrained cullnet...", eval_trained_cull_model)
@@ -376,10 +415,22 @@ def main(
         )
         cull_model = tf.keras.models.load_model(eval_trained_cull_model)
 
-    ynorm_pred = cull_model.predict(X).squeeze()
-    ynorm_test_pred = cull_model.predict(X_test).squeeze()
+
+
+    # print("error        mean=", y.mean(), "std=", y.std())
+    # print("error (norm) mean=", ynorm.mean(), "std=", ynorm.std())
+    # _, (ax, ax2) = plt.subplots(nrows=2)
+    # ax.hist(y)
+    # ax.set_title("error")
+    # ax2.hist(ynorm)
+    # ax2.set_title("error (norm)")
+    # plt.savefig("cull-error-dist.png")
+
+    y_pred = cull_model.predict(dataset.batch(64)).squeeze()
+    print("Loss: " + str(np.mean((y - y_pred)**2)))
 
     # Plot & Log results (includes results for all examples and just test examples, normalized and at original scale)
+    """
     _, ((ax, ax2), (ax3, ax4)) = plt.subplots(nrows=2, ncols=2)
     for data, pred_name, axis in zip(
         [
@@ -397,10 +448,27 @@ def main(
         axis.scatter(data[0], data[1])
         axis.set_title(pred_name)
     plt.savefig("cull-" + model_name + "-predictions.png")
+    """
+
+    plt.clf()
+    rot_err = np.array([utils.pose.geodesic_error(output["r_vec"], output["pose"]) for output in outputs])
+    pos_err = np.array([utils.pose.position_error(output["t_vec"], output["position"])[1] for output in outputs])
+    err = np.cumsum(np.degrees(rot_err)[np.argsort(y_pred)]) / (np.arange(len(rot_err)) + 1)
+    x = (np.arange(len(y_pred)) + 1) / len(y_pred)
+    fig, ax1 = plt.subplots()
+    ax1.scatter(x, err)
+    ax1.set_xlabel("proportion of images kept")
+    ax1.set_ylabel("mean error", color="blue")
+    
+    ax2 = ax1.twinx()
+    ax2.scatter(x, np.sort(y_pred), color="orange")
+    ax2.set_ylabel("confidence threshold", color="orange")
+    plt.savefig("er_curve.png")
 
 
-def train_model(model_name, model, X_train, y_train, X_test, y_test):
+def train_model(model_name, model, images_train, outputs_train, images_test, outputs_test, mask_gen, ref_points):
     save_name = model_name + "-best.h5"
+
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             save_name,
@@ -408,17 +476,118 @@ def train_model(model_name, model, X_train, y_train, X_test, y_test):
             monitor="val_loss",
             mode="min",
             verbose=True,
-        )
+        ),
     ]
+    # for layer in model.layers:
+        # layer.trainable = True
     try:
+        batch_size = 128
         # epochs is set high, use a *single* ^C to finish training
+        """
+        def gen(train):
+            while True:
+                cs_dist = []
+                if train:
+                    idxs = np.random.permutation(len(images_train))
+                    images_shuffled = images_train[idxs]
+                    outputs_shuffled = outputs_train[idxs]
+                    it = zip(images_shuffled, outputs_shuffled)
+                else:
+                    it = zip(images_test, outputs_test)
+
+                for i, (image, output) in enumerate(it):
+                    if i % batch_size == 0:
+                        masks, cs = np.empty((batch_size, 224, 224, 4)), np.empty((batch_size,))
+
+                    if train and np.random.rand() < 0.5:
+                        r = Rotation.from_euler('xyz', np.random.multivariate_normal(np.zeros(3), np.eye(3) * 20**2), degrees=True)
+                        r_vec = (r * Rotation.from_rotvec(output["r_vec"].squeeze())).as_rotvec()
+                        t = np.random.multivariate_normal(np.zeros(3), np.diag([0.5, 0.5, 100]))
+                        t_vec = output["t_vec"].squeeze() + t
+                    else:
+                        r_vec = output["r_vec"].squeeze()
+                        t_vec = output["t_vec"].squeeze()
+
+                    mask = mask_gen.make_and_apply_mask(image, r_vec, t_vec, output["focal_length"], output["centroid"], output["bbox_size"], output["imdims"])
+                    c = reprojection_confidence(r_vec, t_vec, output, mask_gen.size, ref_points)
+
+                    if train:
+                        mask = tf.image.random_flip_left_right(mask)
+                        mask = tf.image.random_flip_up_down(mask)
+                        mask = tf.image.rot90(mask, tf.random.uniform([], 0, 4, tf.int32)).numpy()
+
+                    masks[i % batch_size] = mask
+                    cs[i % batch_size] = c
+                    cs_dist.append(c)
+                    if i == 4000:
+                        img = (mask * 127.5 + 127.5).astype(np.uint8)
+                        print(c)
+                        cv2.imshow('asdf', img[..., :3])
+                        cv2.waitKey(0)
+                        cv2.imshow('asdf', img[..., 3])
+                        cv2.waitKey(0)
+
+                    if i % batch_size == batch_size - 1:
+                        yield masks, cs
+                plt.clf()
+                plt.hist(cs_dist, bins=100)
+                plt.savefig("dist.png")
+        """
+
+        train_dataset = tf.data.Dataset.zip((images_train, tf.data.Dataset.from_tensor_slices(outputs_train))).cache().shuffle(20000)
+        test_dataset = tf.data.Dataset.zip((images_test, tf.data.Dataset.from_tensor_slices(outputs_test)))
+
+        # resampler = tf.data.experimental.rejection_resample(lambda x, y: tf.cast(y > 0, tf.int32), [0.75, 0.25])
+        # train_dataset = train_dataset.apply(resampler).map(lambda _, x: x).shuffle(10000)
+        # print("plotting...")
+        # plt.clf()
+        # y = np.array([y.numpy() for _, y in tqdm.tqdm(train_dataset.take(2000))])
+        # print(y.mean())
+        # plt.hist(y, bins=100)
+        # plt.savefig("test.png")
+        # train_dataset = tf.data.Dataset.from_generator(gen(True), (tf.float32, tf.float32))
+        # test_dataset = tf.data.Dataset.from_generator(gen(False), (tf.float32, tf.float32))
+        # rotate = tf.keras.layers.experimental.preprocessing.RandomRotation(1, "constant")
+        # translate = tf.keras.layers.experimental.preprocessing.RandomTranslation(0.2, 0.2, "constant")
+        def prep(x, y):
+            x = tf.image.random_flip_left_right(x)
+            x = tf.image.random_flip_up_down(x)
+            x = tf.image.rot90(x, tf.random.uniform([], 0, 4, tf.int32))
+            # mask = x != tf.constant([-1.0, -1.0, -1.0])
+            z = x[..., :3]
+            z = (z + 1) / 2
+            z = tf.image.random_brightness(z, 0.2)
+            z = tf.clip_by_value(z, 0, 1)
+            z = tf.image.random_contrast(z, 0.8, 1.2)
+            z = tf.clip_by_value(z, 0, 1)
+            z = tf.image.random_saturation(z, 0.7, 1.3)
+            z = tf.clip_by_value(z, 0, 1)
+            z = z * 2 - 1
+
+            return tf.concat([z, x[..., 3][..., None]], axis=-1), y
+            return x, y
+            # return tf.where(mask, z, x), y
+
+        train_dataset = train_dataset.map(prep)
+        train_dataset = train_dataset.batch(batch_size).prefetch(5)
+        test_dataset = test_dataset.batch(batch_size).prefetch(5)
+
+        # imgs, ys = list(train_dataset.take(1).as_numpy_iterator())[0]
+        # for img, y in zip(imgs, ys):
+            # img = (img * 127.5 + 127.5).astype(np.uint8)
+            # print(y)
+            # cv2.imshow('asdf', img[..., :3])
+            # cv2.waitKey(0)
+            # cv2.imshow('asdf', img[..., 3])
+            # cv2.waitKey(0)
         model.fit(
-            X_train,
-            y_train,
-            batch_size=64,
+            train_dataset,
             epochs=500,
-            verbose=2,
-            validation_data=(X_test, y_test),
+            # steps_per_epoch=len(images_train) // batch_size,
+            verbose=1,
+            # workers=0,
+            validation_data=test_dataset,
+            # validation_steps=len(images_test) // batch_size,
             callbacks=callbacks,
         )
     except KeyboardInterrupt:
@@ -427,11 +596,9 @@ def train_model(model_name, model, X_train, y_train, X_test, y_test):
     return tf.keras.models.load_model(save_name)
 
 
-def derive_keypoints(truth, ref_points):
-    r_vec = utils.pose.to_rotation(truth["pose"]).as_rotvec()
-    t_vec = truth["position"].numpy()
-    imdims = truth["imdims"]
-    focal_length = truth["focal_length"]
+def derive_keypoints(rot, pos, imdims, focal_length, ref_points):
+    r_vec = utils.pose.to_rotation(rot).as_rotvec()
+    t_vec = pos
     cam_matrix = np.array(
         [
             [focal_length, 0, imdims[1] // 2],
@@ -446,98 +613,114 @@ def derive_keypoints(truth, ref_points):
     return kps
 
 
-def _project_adjusted(
-    r_vec, t_vec, size, imdims, all_kps_homo, focal_length, extra_crop_params
-):
-    original_imdims = np.array(extra_crop_params["imdims"])
-    origin = (
-        np.array(extra_crop_params["centroid"]) - extra_crop_params["bbox_size"] / 2
-    )
-    center = original_imdims / 2 - origin
-    focal_length *= imdims / extra_crop_params["bbox_size"]
-    center *= imdims / extra_crop_params["bbox_size"]
-    cam_matrix = np.array(
-        [[focal_length[1], 0, center[1]], [0, focal_length[0], center[0]], [0, 0, 1]],
-        dtype=np.float32,
-    )
-    rot_matrix = Rotation.from_rotvec(r_vec.reshape((3,))).as_matrix()
-    proj = cam_matrix @ np.hstack([rot_matrix, t_vec]) @ all_kps_homo
-    coords = ((proj / proj[2])[:2].T).astype(np.uint8)
-    return np.clip(coords, 0, size - 1)
+def preprocess_image(image, cropsize, centroid, bbox_size):
+    # convert to [0, 1] relative coordinates
+    centroid_norm = centroid / tf.cast(tf.shape(image)[:2], tf.float32)
+    bbox_size_norm = bbox_size / tf.cast(tf.shape(image)[:2], tf.float32)  # will broadcast to shape [2]
+
+    # crop to (bbox_size, bbox_size) centered around centroid and resize to (cropsize, cropsize)
+    half_bbox_size = bbox_size_norm / 2
+    return tf.squeeze(tf.image.crop_and_resize(
+            image[None, ...],
+            [
+                [
+                    centroid_norm[0] - half_bbox_size[0],
+                    centroid_norm[1] - half_bbox_size[1],
+                    centroid_norm[0] + half_bbox_size[0],
+                    centroid_norm[1] + half_bbox_size[1],
+                ]
+            ],
+            [0],
+            [cropsize, cropsize],
+            extrapolation_value=0,
+        ))
 
 
 def compute_model_error_training_data(
-    model, directory, ref_points, default_focal_length, error_func, mask_gen
+    model, directory, ref_points, default_focal_length, mask_gen
 ):
-    nb_keypoints = model.output.shape[-1] // 2
-    cropsize = model.input.shape[1]
+    cache_path = "cull-cache." + os.path.basename(os.path.normpath(directory))
+    if os.path.exists(cache_path):
+        print("Using cache...")
+        outputs = np.load(os.path.join(cache_path, "outputs.npy"), allow_pickle=True)
+        return cache_path, outputs
+
+    print("Using", directory, "to generate cullnet training data...")
+    os.makedirs(cache_path)
+
+    nb_keypoints = model.signatures["serving_default"].outputs[0].shape[1]
+    cropsize = 224
     ref_points = ref_points[:nb_keypoints]
 
-    data = utils.data.dataset_from_directory(
-        directory,
-        cropsize,
-        nb_keypoints=nb_keypoints,
-        focal_length=default_focal_length,
-    )
-    data = data.batch(32)
 
+    image_paths = sorted(glob.glob(os.path.join(directory, "image_*")))
+    meta_paths = sorted(glob.glob(os.path.join(directory, "meta_*")))
     inputs = []
     outputs = []
+    for i, (image_path, meta_path) in enumerate(tqdm.tqdm(
+        list(zip(image_paths, meta_paths))
+    )):
+        image = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
 
-    for image_batch, truth_batch in tqdm.tqdm(data):
-        kps_batch = model.predict(image_batch)
-        kps_batch = utils.model.decode_displacement_field(kps_batch)
-        kps_batch_cropped = kps_batch * (cropsize // 2) + (cropsize // 2)
-        kps_batch_uncropped = (
-            kps_batch
-            / 2
-            * truth_batch["bbox_size"][
-                :,
-                None,
-                None,
-                None,
-            ]
-            + truth_batch["centroid"][:, None, None, :]
+        # augmentation (train only)
+        image = image.astype(np.float32) / 255
+        image = tf.image.random_brightness(image, 0.5)
+        image = tf.clip_by_value(image, 0, 1)
+        image = tf.image.random_contrast(image, 0.7, 1.4)
+        image = tf.clip_by_value(image, 0, 1)
+        image = tf.image.random_saturation(image, 0.6, 1.5)
+        image = tf.clip_by_value(image, 0, 1)
+        image += tf.random.normal(image.shape, 0.0, 0.05)
+        image = tf.clip_by_value(image, 0, 1)
+        image = (image.numpy() * 255).astype(np.uint8)
+
+        kps, centroid, bbox_size = model(image)
+        kps_uncropped = kps.numpy() / 2 * bbox_size.numpy() + centroid.numpy()
+        focal_length = default_focal_length if default_focal_length else meta["focal_length"]
+        # get pose solution in uncropped reference frame
+        r_vec, t_vec = utils.pose.solve_pose(
+            ref_points,
+            kps_uncropped,
+            [focal_length, focal_length],
+            image.shape[:2],
+            ransac=True,
+            reduce_mean=False,
         )
-        truth_batch = [
-            dict(zip(truth_batch.keys(), t)) for t in zip(*truth_batch.values())
-        ]
-        for image, kps_cropped, kps_uncropped, truth in zip(
-            image_batch.numpy(),
-            kps_batch_cropped.numpy(),
-            kps_batch_uncropped.numpy(),
-            truth_batch,
-        ):
-            # get pose solution in uncropped reference frame
-            r_vec, t_vec = utils.pose.solve_pose(
-                ref_points,
-                kps_uncropped,
-                [truth["focal_length"], truth["focal_length"]],
-                truth["imdims"],
-                ransac=True,
-                reduce_mean=False,
-            )
 
-            extra_crop_params = {
-                "centroid": truth["centroid"],
-                "bbox_size": truth["bbox_size"],
-                "imdims": truth["imdims"],
-            }
-            img_mask = mask_gen.make_and_apply_mask(
-                image, r_vec, t_vec, truth["focal_length"], extra_crop_params
-            )
-            inputs.append(img_mask)
+        cropped = preprocess_image(image, cropsize, centroid, bbox_size).numpy()
+        cropped = cv2.cvtColor(cropped, cv2.COLOR_RGB2BGR)
+        mask = mask_gen.make_and_apply_mask(cropped, r_vec, t_vec, focal_length, centroid.numpy(), bbox_size.numpy(), np.array(image.shape[:2]))
+        cv2.imwrite(os.path.join(cache_path, os.path.basename(image_path).split(".")[0] + ".png"), mask)
 
-            if "keypoints" not in truth:
-                unscaled_kps = derive_keypoints(truth, ref_points)
-            else:
-                unscaled_kps = truth["keypoints"]
-            # L2 keypoint error is computed in cropped reference frame
-            kps_true = (unscaled_kps - truth["centroid"]) / truth[
-                "bbox_size"
-            ] * cropsize + (cropsize // 2)
-            error = error_func(
-                kps_cropped, kps_true, r_vec, t_vec, truth["pose"], truth["position"]
-            )
-            outputs.append(error)
-    return np.array(inputs), np.array(outputs)
+        if "keypoints" not in meta:
+            unscaled_kps = derive_keypoints(np.array(meta["pose"]), np.array(meta["translation"]), image.shape[:2], focal_length, ref_points)
+        else:
+            unscaled_kps = np.array(meta["keypoints"])[:nb_keypoints] * image.shape[:2]
+        # L2 keypoint error is computed in cropped reference frame
+        kps_true = (unscaled_kps - centroid.numpy()) / bbox_size.numpy() * cropsize + (cropsize // 2)
+        # kps_reproj = _project_adjusted(r_vec, t_vec, cropsize, ref_points, truth["focal_length"], extra_crop_params)
+        outputs.append({
+            "kps_true": kps_true,
+            "r_vec": r_vec,
+            "t_vec": t_vec,
+            "pose": np.array(meta["pose"]),
+            "position": np.array(meta["translation"]),
+            "focal_length": focal_length,
+            "centroid": centroid.numpy(),
+            "bbox_size": bbox_size.numpy(),
+            "imdims": np.array(image.shape[:2]),
+        })
+        # outputs.append((
+            # kps_reproj[:, ::-1], kps_true.numpy(), r_vec, t_vec, truth["pose"].numpy(), truth["position"].numpy()
+        # ))
+        # print(utils.pose.geodesic_error(r_vec, truth["pose"].numpy()), conf(kps_reproj[:, ::-1], kps_true.numpy()).mean())
+        # img = (inputs[-1]* 127.5 + 127.5).astype(np.uint8)
+        # for kp in kps_true:
+            # cv2.circle(img, tuple(map(int, kp[::-1])), 3, (255, 255, 255), -1)
+        # cv2.imshow('adsf', img)
+        # cv2.waitKey(0)
+    outputs = np.array(outputs)
+    np.save(os.path.join(cache_path, "outputs.npy"), outputs)
+    return cache_path, outputs
