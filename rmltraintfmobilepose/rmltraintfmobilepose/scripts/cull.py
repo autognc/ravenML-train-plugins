@@ -41,9 +41,9 @@ class MaskGenerator:
         )
         assert mask.shape[:2] == image.shape[:2]
         # code for spot-checking masks
-        # cv2.imshow("asdf", (image * 127.5 + 127.5).astype(np.uint8))
+        # cv2.imshow("image", (image * 127.5 + 127.5).astype(np.uint8))
         # cv2.waitKey(0)
-        # cv2.imshow("asdf", (mask * 255).astype(np.uint8))
+        # cv2.imshow("mask", (mask * 255).astype(np.uint8))
         # cv2.waitKey(0)
         if self.stack:
             w, h, c = image.shape
@@ -60,15 +60,17 @@ class MaskGenerator:
 
 
 class NumpyMaskProjector(MaskGenerator):
-    def __init__(self, all_model_keypoints, dilate_iters=2, **kwargs):
+    def __init__(self, stl_fn, dilate_iters=2, **kwargs):
         super().__init__(**kwargs)
         self.dilate_iters = dilate_iters
+        all_model_keypoints = load_stl(stl_fn)
         self.all_kps_homo = np.hstack(
             [all_model_keypoints, np.ones((len(all_model_keypoints), 1))]
         ).T
 
     def make_binary_mask(self, image, r_vec, t_vec, focal_length, extra_crop_params):
         imdims = np.array(image.shape[:2])
+        np.save('out.npy', (imdims, image, r_vec, t_vec, focal_length, extra_crop_params))
         coords = _project_adjusted(
             r_vec,
             t_vec,
@@ -85,14 +87,6 @@ class NumpyMaskProjector(MaskGenerator):
 
 
 class OpenGLMaskProjector(MaskGenerator):
-    STL_DTYPE = np.dtype(
-        [
-            ("norm", np.float32, [3]),
-            ("vec", np.float32, [3, 3]),
-            ("attr", np.uint16, [1]),
-        ]
-    ).newbyteorder("<")
-
     VERTEX_SHADER = """
         #version 330
         in vec3 in_vert;
@@ -119,8 +113,7 @@ class OpenGLMaskProjector(MaskGenerator):
     def __init__(self, stl_path, **kwargs):
         super().__init__(**kwargs)
 
-        stl = np.fromfile(stl_path, dtype=self.STL_DTYPE, offset=84)
-        verts = stl["vec"].reshape(-1, 3)
+        verts = load_stl(stl_path)
 
         ctx = moderngl.create_context(standalone=True)
 
@@ -166,6 +159,17 @@ class OpenGLMaskProjector(MaskGenerator):
             )[:, :, 0]
             / 255
         )
+
+
+def load_stl(stl_fn):
+    stl = np.fromfile(stl_fn, dtype=np.dtype(
+        [
+            ("norm", np.float32, [3]),
+            ("vec", np.float32, [3, 3]),
+            ("attr", np.uint16, [1]),
+        ]
+    ).newbyteorder("<"), offset=84)
+    return stl["vec"].reshape(-1, 3)
 
 
 def create_model_mobilenetv2_imagenet_mse(input_shape):
@@ -215,7 +219,7 @@ cull_error_metrics = {
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: np.mean(
             np.linalg.norm(kps_pred - kps_true, axis=-1)
         ),
-        lambda y: np.clip((np.log(y) - 5.935) / 0.1731, -3.5, 3.5),
+        lambda y: np.log(y),
         lambda ynorm: np.exp(ynorm * 0.1731 + 5.935),
     ),
     "geodesic_rotation": (
@@ -321,12 +325,7 @@ def main(
         print("Using", model_path, "to generate cullnet training data...")
         mask_gen_init = cull_mask_generators[mask_mode]
         # TODO make hardcoded stuff into options
-        if mask_mode.startswith("numpy"):
-            mask_gen = mask_gen_init(
-                np.load("keypoints700k.npy"), size=model.input.shape[1]
-            )
-        else:
-            mask_gen = mask_gen_init("Cygnus_ENHANCED.stl", size=model.input.shape[1])
+        mask_gen = mask_gen_init("Cygnus_ENHANCED.stl", size=model.input.shape[1])
         X, y = compute_model_error_training_data(
             model, directory, ref_points, focal_length, error_func, mask_gen
         )
