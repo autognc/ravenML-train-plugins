@@ -144,7 +144,10 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
                     image, kps_cropped, err_rot=errs_rot[-1], err_pos=errs_pos[-1][1]
                 )
                 cv2.imwrite(
-                    os.path.join(render, f"{truth_batch['image_id'][i]}.png"),
+                    os.path.join(
+                        render,
+                        f"{truth_batch['image_id'][i].numpy().decode('utf-8')}.png",
+                    ),
                     cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
                 )
 
@@ -167,9 +170,9 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
     if output:
         with open(f"{output}/results.json", "w") as f:
             json.dump(results, f)
-        np.save(f"{output}/pose_errs.npy", np.array(errs_rot))
-        np.save(f"{output}/position_errs.npy", np.array(errs_pos).T)
-        np.save(f"{output}/keypoint_errs.npy", np.array(errs_by_keypoint))
+        np.save(f"{output}/errs_rot.npy", np.array(errs_rot))
+        np.save(f"{output}/errs_pos.npy", np.array(errs_pos).T)
+        np.save(f"{output}/errs_keypoint.npy", np.array(errs_by_keypoint))
         np.save(f"{output}/stdevs.npy", np.array(stdevs))
         np.save(f"{output}/fls.npy", np.array(fls))
         np.save(f"{output}/inliers.npy", np.array(num_inliers))

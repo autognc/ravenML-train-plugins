@@ -1,5 +1,6 @@
 import tensorflow as tf
 import click
+import os
 from .. import utils
 
 help_string = """
@@ -11,8 +12,9 @@ and output a Tensor([4], dtype=float32) pose prediction.
 
 The resulting saved model can be loaded for inference using TF 1.x or 2.x using the following code:
     model = tf.compat.v2.saved_model.load(path)
-The input shape can then be retrieved with:
-    input_shape = model.__call__.concrete_functions[0].inputs[0].shape
+The input out output shapes can then be retrieved with:
+    input_shape = model.signatures['serving_default'].inputs[0].shape
+    input_shape = model.signatures['serving_default'].outputs[0].shape
 
 """
 
@@ -40,13 +42,11 @@ def main(model_path, output_path):
                     setattr(self, variable.name, variable)
 
         @tf.function(
-            input_signature=[tf.TensorSpec(model.input.shape[1:], dtype=tf.uint8)]
+            input_signature=[tf.TensorSpec(model.input.shape[1:], dtype=tf.float32)]
         )
         def __call__(self, image):
             batch_im = tf.expand_dims(image, 0)
-            normalized = tf.keras.applications.mobilenet_v2.preprocess_input(
-                tf.cast(batch_im, tf.float32)
-            )
+            normalized = tf.keras.applications.mobilenet_v2.preprocess_input(batch_im)
             df = model(normalized)
             kps_batch = utils.model.decode_displacement_field(df)
             kps_batch = kps_batch * (self.cropsize // 2) + (self.cropsize // 2)
@@ -54,3 +54,11 @@ def main(model_path, output_path):
 
     module = Module(model)
     tf.saved_model.save(module, output_path)
+
+    # converter = tf.lite.TFLiteConverter.from_concrete_functions(
+    # [module.__call__.get_concrete_function()]
+    # )
+    # converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    # tflite_model = converter.convert()
+    # with tf.io.gfile.GFile(os.path.join(output_path, "model.tflite"), "wb") as f:
+    # f.write(tflite_model)
