@@ -14,6 +14,7 @@ $ ravenml train --config train_config.json tf-mobilepose cull pose_model.h5 ~/ra
     -f 1422 -k numpy_cut -c cull.npy -m mobilenetv2_imagenet_mse -t mobilenetv2_imagenet_mse-1609270326-best.h5
 """
 from scipy.spatial.transform import Rotation
+from scipy.stats import trim_mean
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
@@ -172,7 +173,7 @@ def load_stl(stl_fn):
     return stl["vec"].reshape(-1, 3)
 
 
-def create_model_mobilenetv2_imagenet_mse(input_shape):
+def create_model_mobilenetv2_imagenet_mse(input_shape, pose_model):
     assert (
         input_shape[-1] == 3
     ), "Using this model requires cut mask generation for 3-channel input data"
@@ -192,7 +193,28 @@ def create_model_mobilenetv2_imagenet_mse(input_shape):
     return full_model
 
 
-def create_model_mobilenetv2_fresh_mse(input_shape):
+def create_model_mobilenetv2_imagenet_mse_low_alpha(input_shape, pose_model):
+    assert (
+        input_shape[-1] == 3
+    ), "Using this model requires cut mask generation for 3-channel input data"
+    model = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape,
+        include_top=True,
+        weights="imagenet",
+        alpha=0.35,
+        # These are ignored, but required to load weights
+        classes=1000,
+        classifier_activation="softmax",
+    )
+    new_input = model.input
+    feat_out = model.layers[-2].output
+    out = tf.keras.layers.Dense(1, activation="linear")(feat_out)
+    full_model = tf.keras.models.Model(new_input, out)
+    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
+    return full_model
+
+
+def create_model_mobilenetv2_fresh_mse(input_shape, pose_model):
     model = tf.keras.applications.MobileNetV2(
         input_shape=input_shape, include_top=True, weights=None
     )
@@ -204,11 +226,25 @@ def create_model_mobilenetv2_fresh_mse(input_shape):
     return full_model
 
 
+def create_model_from_pose(input_shape, pose_model):
+    # print(pose_model.summary())
+    new_input = pose_model.input
+    feat_out = pose_model.layers[-2].output
+    x = feat_out
+    x = tf.keras.layers.Flatten()(x)
+    out = tf.keras.layers.Dense(1, activation="linear")(x)
+    full_model = tf.keras.models.Model(new_input, out)
+    full_model.compile(optimizer=tf.keras.optimizers.Adam(), loss="mse", metrics=[])
+    return full_model
+
+
 # Several possible cullnet models
 #   name: model_generator_function
 cull_models = {
     "mobilenetv2_imagenet_mse": create_model_mobilenetv2_imagenet_mse,
+    "mobilenetv2_imagenet_mse_low_alpha": create_model_mobilenetv2_imagenet_mse_low_alpha,
     "mobilenetv2_fresh_mse": create_model_mobilenetv2_fresh_mse,
+    "from_pose": create_model_from_pose,
 }
 
 
@@ -219,8 +255,15 @@ cull_error_metrics = {
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: np.mean(
             np.linalg.norm(kps_pred - kps_true, axis=-1)
         ),
-        lambda y: np.log(y),
-        lambda ynorm: np.exp(ynorm * 0.1731 + 5.935),
+        lambda y: (np.log(y) - 1.7351553) / 1.1415093,
+        lambda ynorm: np.exp(ynorm * 1.1415093 + 1.7351553),
+    ),
+    "keypoint_l2_trimed": (
+        lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: np.mean(
+            np.linalg.norm(trim_mean(kps_pred, 0.1, axis=0) - kps_true)
+        ),
+        lambda y: (np.log(y) - 3.0916994) / 1.2838193,
+        lambda ynorm: np.exp(ynorm * 1.2838193 + 3.0916994),
     ),
     "geodesic_rotation": (
         lambda kps_pred, kps_true, r_vec, t_vec, pose_true, position_true: utils.pose.geodesic_error(
@@ -326,16 +369,20 @@ def main(
         mask_gen_init = cull_mask_generators[mask_mode]
         # TODO make hardcoded stuff into options
         mask_gen = mask_gen_init("Cygnus_ENHANCED.stl", size=model.input.shape[1])
-        X, y = compute_model_error_training_data(
+        X, y, true_rot_error = compute_model_error_training_data(
             model, directory, ref_points, focal_length, error_func, mask_gen
         )
         if cache:
             np.save("cull-masks." + cache, X)
             np.save("cull-errors." + cache, y)
+            np.save("cull-true_rot_error." + cache, true_rot_error)
     else:
         print("Using cached data...")
-        X, y = np.load("cull-masks." + cache), np.load("cull-errors." + cache)
+        X, y, true_rot_error = np.load("cull-masks." + cache), np.load("cull-errors." + cache), np.load("cull-true_rot_error." + cache)
     print("Loaded dataset: ", X.shape, " -> ", y.shape)
+
+    # patch inf weirdness
+    y = np.clip(y, np.amin(y), np.nanmax(y[y != np.inf]))
 
     # Ensure error data/labels looks good to feed into the model
     ynorm = error_norm(y)
@@ -364,7 +411,7 @@ def main(
     if eval_trained_cull_model is None:
         print("Training cullnet...", X_train.shape, X_test.shape)
         model_name = model_type + "-" + str(int(time.time()))
-        cull_model = cull_models[model_type](X.shape[1:])
+        cull_model = cull_models[model_type](X.shape[1:], model)
         cull_model = train_model(
             model_name, cull_model, X_train, y_train, X_test, y_test
         )
@@ -396,6 +443,20 @@ def main(
         axis.scatter(data[0], data[1])
         axis.set_title(pred_name)
     plt.savefig("cull-" + model_name + "-predictions.png")
+
+    # er curve
+    plt.clf()
+    y = np.cumsum(np.degrees(true_rot_error)[np.argsort(ynorm_pred)]) / (np.arange(len(true_rot_error)) + 1)
+    x = (np.arange(len(ynorm_pred)) + 1) / len(ynorm_pred)
+    fig, ax1 = plt.subplots()
+    ax1.scatter(x, y)
+    ax1.set_xlabel("proportion of images kept")
+    ax1.set_ylabel("mean error", color="blue")
+    ax2 = ax1.twinx()
+    ax2.scatter(x, np.sort(ynorm_pred)[::-1], color="orange")
+    ax2.set_ylabel("confidence threshold", color="orange")
+    plt.savefig("er_curve.png")
+    np.save('true_rot_error-ynorm-ynorm_pred.npy', (true_rot_error, ynorm, ynorm_pred))
 
 
 def train_model(model_name, model, X_train, y_train, X_test, y_test):
@@ -482,6 +543,7 @@ def compute_model_error_training_data(
 
     inputs = []
     outputs = []
+    true_rot_error = []
 
     for image_batch, truth_batch in tqdm.tqdm(data):
         kps_batch = model.predict(image_batch)
@@ -539,4 +601,5 @@ def compute_model_error_training_data(
                 kps_cropped, kps_true, r_vec, t_vec, truth["pose"], truth["position"]
             )
             outputs.append(error)
-    return np.array(inputs), np.array(outputs)
+            true_rot_error.append(utils.pose.geodesic_error(r_vec, truth["pose"]))
+    return np.array(inputs), np.array(outputs), np.array(true_rot_error)
