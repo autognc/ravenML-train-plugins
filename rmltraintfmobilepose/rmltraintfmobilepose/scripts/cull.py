@@ -226,10 +226,9 @@ def create_model_mobilenetv2_fresh_mse(input_shape, pose_model):
     return full_model
 
 
-def create_model_from_pose(input_shape, pose_model):
-    # print(pose_model.summary())
+def create_model_from_pose(input_shape, pose_model, from_layer="spatial_dropout2d"):
     new_input = pose_model.input
-    feat_out = pose_model.layers[-2].output
+    feat_out = pose_model.get_layer(from_layer).output
     x = feat_out
     x = tf.keras.layers.Flatten()(x)
     out = tf.keras.layers.Dense(1, activation="linear")(x)
@@ -244,7 +243,8 @@ cull_models = {
     "mobilenetv2_imagenet_mse": create_model_mobilenetv2_imagenet_mse,
     "mobilenetv2_imagenet_mse_low_alpha": create_model_mobilenetv2_imagenet_mse_low_alpha,
     "mobilenetv2_fresh_mse": create_model_mobilenetv2_fresh_mse,
-    "from_pose": create_model_from_pose,
+    "from_pose": lambda input_shape, pose_model: create_model_from_pose(input_shape, pose_model, "spatial_dropout2d"),
+    "from_trunc_pose": lambda input_shape, pose_model: create_model_from_pose(input_shape, pose_model, "block_7_add"),
 }
 
 
@@ -358,6 +358,8 @@ def main(
 ):
 
     model = tf.keras.models.load_model(model_path, compile=False)
+    # print(model.summary())
+
     keypoints_path = (
         keypoints if keypoints else os.path.join(directory, "keypoints.npy")
     )
