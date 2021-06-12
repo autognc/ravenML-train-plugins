@@ -1,0 +1,7 @@
+Adam:
+    num_classes: 90
+    train_steps: 50000
+    initial_learning_rate : 1e-3
+    epsilon: 1e-7
+    batch_size : 128
+    max_box_predictions: 100
