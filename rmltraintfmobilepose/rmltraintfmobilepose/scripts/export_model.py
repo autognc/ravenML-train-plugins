@@ -54,11 +54,3 @@ def main(model_path, output_path):
 
     module = Module(model)
     tf.saved_model.save(module, output_path)
-
-    # converter = tf.lite.TFLiteConverter.from_concrete_functions(
-    # [module.__call__.get_concrete_function()]
-    # )
-    # converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    # tflite_model = converter.convert()
-    # with tf.io.gfile.GFile(os.path.join(output_path, "model.tflite"), "wb") as f:
-    # f.write(tflite_model)

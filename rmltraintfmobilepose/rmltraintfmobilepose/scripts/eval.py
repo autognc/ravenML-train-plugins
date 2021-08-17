@@ -122,15 +122,6 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
                 utils.pose.position_error(t_vec, truth_batch["position"][i])
             )
 
-            # if "keypoints" in truth:
-            #     kps_true = (truth["keypoints"] - truth["centroid"]) / truth[
-            #         "bbox_size"
-            #     ] * crop_size + (crop_size // 2)
-            #     # TODO doesn't use all guesses
-            #     errs_by_keypoint.append(
-            #         [np.linalg.norm(kp_true - kp) for kp, kp_true in zip(kps, kps_true)]
-            #     )
-
             kps_by_kp = kps_cropped.reshape(-1, nb_keypoints, 2).transpose([1, 0, 2])
             stdevs.append(
                 np.linalg.norm(
