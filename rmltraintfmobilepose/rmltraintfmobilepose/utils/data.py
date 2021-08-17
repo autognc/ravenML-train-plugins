@@ -11,16 +11,32 @@ def recursive_map_dict(d, f):
     return f(d)
 
 
-def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
+def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=None):
     """
     Get a Tensorflow dataset that generates samples from a directory with test data
     that is not in TFRecord format (i.e. a directory with image_*.png and meta_*.json files).
     The images are cropped to the spacecraft using the bounding box truth data.
     :param dir_path: the path to the directory
-    :param cropsize: the output size for the images, in pixels
+    :param crop_size: the output size for the images, in pixels
     :return: a Tensorflow dataset that generates (image, metadata) tuples where image is a [cropsize, cropsize, 3]
     Tensor and metadata is a dictionary of Tensors.
     """
+
+    def parse(metadata, img_id):
+        parsed = {
+            # TODO don't hardcode key, maybe
+            "bbox": metadata["bboxes"]["cygnus"],
+            "pose": metadata["pose"],
+            "translation": metadata["translation"],
+            "image_id": img_id,
+        }
+        if focal_length is None:
+            parsed["focal_length"] = metadata["focal_length"]
+        else:
+            parsed["focal_length"] = focal_length
+        if "keypoints" in metadata:
+            parsed["keypoints"] = metadata["keypoints"]
+        return recursive_map_dict(parsed, tf.convert_to_tensor)
 
     def generator():
         image_files = sorted(glob.glob(os.path.join(dir_path, "image_*")))
@@ -29,20 +45,21 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
             # load metadata
             with open(meta_file, "r") as f:
                 metadata = json.load(f)
-            metadata = recursive_map_dict(metadata, tf.convert_to_tensor)
-
+            img_id = os.path.basename(image_file).split("_")[1].split(".")[0]
+            if not metadata["bboxes"]:
+                continue
+            metadata = parse(metadata, img_id)
             yield image_file, metadata
 
     meta_file_0 = glob.glob(os.path.join(dir_path, "meta_*.json"))[0]
     with open(meta_file_0, "r") as f:
         meta0 = json.load(f)
-    dtypes = recursive_map_dict(meta0, lambda x: tf.convert_to_tensor(x).dtype)
+    dtypes = recursive_map_dict(parse(meta0, "0"), lambda x: x.dtype)
     dataset = tf.data.Dataset.from_generator(generator, (tf.string, dtypes))
 
     def process(image_file, metadata):
         # load bounding box
-        # TODO don't hardcode key, maybe
-        bbox = metadata["bboxes"]["cygnus"]
+        bbox = metadata["bbox"]
         xmin = bbox["xmin"]
         xmax = bbox["xmax"]
         ymin = bbox["ymin"]
@@ -54,7 +71,7 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
 
         # load and crop image
         image_data = tf.io.read_file(image_file)
-        imdims, image = preprocess_image(image_data, centroid, bbox_size, cropsize)
+        imdims, image = preprocess_image(image_data, centroid, bbox_size, crop_size)
 
         truth = {
             "pose": tf.ensure_shape(metadata["pose"], [4]),
@@ -62,8 +79,11 @@ def dataset_from_directory(dir_path, cropsize, nb_keypoints=None):
             "centroid": tf.ensure_shape(centroid, [2]),
             "imdims": imdims,
             "position": tf.ensure_shape(metadata["translation"], [3]),
+            "image_id": metadata["image_id"],
         }
-        if nb_keypoints:
+        if "focal_length" in metadata:
+            truth["focal_length"] = tf.ensure_shape(metadata["focal_length"], [])
+        if nb_keypoints and "keypoints" in metadata:
             truth["keypoints"] = (
                 tf.cast(metadata["keypoints"][:nb_keypoints], tf.float32) * imdims
             )

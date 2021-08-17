@@ -8,10 +8,18 @@ import cv2
 
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
-    def __init__(self, ref_points, cropsize, focal_length, experiment=None):
+    def __init__(
+        self,
+        model,
+        ref_points,
+        crop_size,
+        focal_length,
+        real_image_dir=None,
+        experiment=None,
+    ):
         super().__init__()
+        self.model = model
         self.ref_points = ref_points
-        self.crop_size = cropsize
         self.focal_length = focal_length
         self.experiment = experiment
         self.targets = tf.Variable(0.0, shape=tf.TensorShape(None))
@@ -19,6 +27,12 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         self.train_errors = []
         self.test_errors = []
         self.comet_step = 0
+
+        self.real_image_dataset = []
+        if real_image_dir:
+            self.real_image_dataset = utils.data.dataset_from_directory(
+                real_image_dir, crop_size, len(ref_points)
+            ).batch(32)
 
     def assign_metric(self, y_true, y_pred):
         self.targets.assign(y_true)
@@ -28,32 +42,88 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         return 0
 
     def calc_pose_error(self):
-        label = KeypointsModel.decode_label(self.targets.numpy())
+        truth_batch = KeypointsModel.decode_label(self.targets.numpy())
         kps_batch = self.outputs.numpy()
-        kps_batch = kps_batch * (self.crop_size // 2) + (self.crop_size // 2)
-
+        kps_batch_uncropped = (
+            kps_batch
+            / 2
+            * truth_batch["bbox_size"][
+                :,
+                None,
+                None,
+                None,
+            ]
+            + truth_batch["centroid"][:, None, None, :]
+        )
         error_batch = np.zeros(kps_batch.shape[0])
-        for i, kps in enumerate(kps_batch):
+        for i, kps in enumerate(kps_batch_uncropped.numpy()):
             r_vec, t_vec = utils.pose.solve_pose(
                 self.ref_points,
                 kps,
                 [self.focal_length, self.focal_length],
-                [self.crop_size, self.crop_size],
-                extra_crop_params={
-                    "centroid": label["centroid"][i],
-                    "bbox_size": label["bbox_size"][i],
-                    "imdims": [label["height"][i], label["width"][i]],
-                },
+                [truth_batch["height"][i], truth_batch["width"][i]],
                 ransac=True,
                 reduce_mean=False,
             )
 
-            error_batch[i] = utils.pose.geodesic_error(r_vec, label["pose"][i].numpy())
+            error_batch[i] = utils.pose.geodesic_error(
+                r_vec, truth_batch["pose"][i].numpy()
+            )
 
         return error_batch
 
     def on_epoch_begin(self, epoch, logs=None):
         self.train_errors = []
+
+    def on_epoch_end(self, epoch, logs=None):
+        errs_pose = []
+        errs_pose_flip = []
+        errs_position = []
+        for image_batch, truth_batch in self.real_image_dataset:
+            kps_batch = self.model.predict(image_batch)
+            kps_batch = utils.model.decode_displacement_field(kps_batch)
+            kps_batch_uncropped = (
+                kps_batch
+                / 2
+                * truth_batch["bbox_size"][
+                    :,
+                    None,
+                    None,
+                    None,
+                ]
+                + truth_batch["centroid"][:, None, None, :]
+            )
+            for i, kps in enumerate(kps_batch_uncropped.numpy()):
+                r_vec, t_vec = utils.pose.solve_pose(
+                    self.ref_points,
+                    kps,
+                    [truth_batch["focal_length"][i], truth_batch["focal_length"][i]],
+                    truth_batch["imdims"][i],
+                    ransac=True,
+                    reduce_mean=False,
+                )
+                errs_pose.append(
+                    utils.pose.geodesic_error(r_vec, truth_batch["pose"][i])
+                )
+                errs_pose_flip.append(
+                    utils.pose.geodesic_error(r_vec, truth_batch["pose"][i], flip=True)
+                )
+                errs_position.append(
+                    utils.pose.position_error(t_vec, truth_batch["position"][i])[1]
+                )
+        err_pose = np.degrees(np.mean(errs_pose))
+        err_pose_flip = np.degrees(np.mean(errs_pose_flip))
+        err_position = np.mean(errs_position)
+        print(
+            f"\nREAL IMAGE ERROR: {err_pose:.2f} ({err_pose_flip:.2f} flip) deg, {err_position:.2f} pos"
+        )
+        if self.experiment:
+            with self.experiment.validate():
+                self.experiment.log_metric("real_image_pose_error_deg", err_pose)
+                self.experiment.log_metric(
+                    "real_image_pose_error_flip_deg", err_pose_flip
+                )
+                self.experiment.log_metric("real_image_position_error", err_position)
 
     def on_train_batch_end(self, batch, logs=None):
         self.comet_step += 1
@@ -125,13 +195,10 @@ class KeypointsModel:
             "image/object/bbox/ymax": tf.io.VarLenFeature(tf.float32),
             "image/encoded": tf.io.FixedLenFeature([], tf.string),
             "image/object/pose": tf.io.FixedLenFeature([4], tf.float32),
+            "image/imageset": tf.io.FixedLenFeature([], tf.string),
         }
 
-        cropsize = self.crop_size
-
-        def _parse_function(example):
-            parsed = tf.io.parse_single_example(example, features)
-
+        def _parse_function(parsed):
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed["image/height"], tf.float32)
             width = tf.cast(parsed["image/width"], tf.float32)
@@ -141,19 +208,27 @@ class KeypointsModel:
             ymin = parsed["image/object/bbox/ymin"].values[0] * height
             ymax = parsed["image/object/bbox/ymax"].values[0] * height
             centroid = tf.stack([(ymax + ymin) / 2, (xmax + xmin) / 2], axis=-1)
-            bbox_size = tf.maximum(xmax - xmin, ymax - ymin) * 1.25
+            bbox_size = tf.maximum(xmax - xmin, ymax - ymin)
 
             # random positioning
             if train:
-                bbox_size *= tf.random.uniform([], minval=1.0, maxval=1.5)
-                # size / 10 ensures that object does not go off screen
-                centroid += tf.random.uniform(
-                    [2], minval=-bbox_size / 10, maxval=bbox_size / 10
+                expand_factor = tf.random.uniform(
+                    [],
+                    minval=self.hp["bbox_expand_min"],
+                    maxval=self.hp["bbox_expand_max"],
                 )
+                # ensures that object does not go off screen
+                shift_amount = (expand_factor - 1) * bbox_size / 2
+                centroid += tf.random.uniform(
+                    [2], minval=-shift_amount, maxval=shift_amount
+                )
+                bbox_size *= expand_factor
+            else:
+                bbox_size *= 1.25
 
             # decode, preprocess to [-1, 1] range, and crop image/keypoints
             old_dims, image = utils.model.preprocess_image(
-                parsed["image/encoded"], centroid, bbox_size, cropsize
+                parsed["image/encoded"], centroid, bbox_size, self.crop_size
             )
 
             keypoints = utils.model.preprocess_keypoints(
@@ -192,8 +267,35 @@ class KeypointsModel:
                 # image values into the [0, 1] format
                 image = (image + 1) / 2
 
-                image = tf.image.random_brightness(image, 0.2)
-                image = tf.image.random_saturation(image, 0.8, 1.2)
+                if "random_hue" in self.hp:
+                    image = tf.image.random_hue(image, self.hp["random_hue"])
+                    image = tf.clip_by_value(image, 0, 1)
+
+                if "random_brightness" in self.hp:
+                    image = tf.image.random_brightness(
+                        image, self.hp["random_brightness"]
+                    )
+                    image = tf.clip_by_value(image, 0, 1)
+
+                if "random_saturation" in self.hp:
+                    image = tf.image.random_saturation(
+                        image, *self.hp["random_saturation"]
+                    )
+                    image = tf.clip_by_value(image, 0, 1)
+
+                if "random_contrast" in self.hp:
+                    image = tf.image.random_contrast(image, *self.hp["random_contrast"])
+                    image = tf.clip_by_value(image, 0, 1)
+
+                if "random_gaussian" in self.hp:
+                    if tf.random.uniform([], 0, 1) > 0.5:
+                        image += tf.random.normal(
+                            tf.shape(image), stddev=self.hp["random_gaussian"]
+                        )
+                        image = tf.clip_by_value(image, 0, 1)
+
+                if "random_jpeg" in self.hp:
+                    image = tf.image.random_jpeg_quality(image, *self.hp["random_jpeg"])
                 image = tf.clip_by_value(image, 0, 1)
 
                 # convert back to [-1, 1] format
@@ -209,10 +311,10 @@ class KeypointsModel:
             )
             return image, truth
 
-        with open(
-            os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r"
-        ) as f:
-            num_examples = int(f.read())
+        # with open(
+        #     os.path.join(self.data_dir, f"{split_name}.record.numexamples"), "r"
+        # ) as f:
+        #     num_examples = int(f.read())
         filenames = tf.io.gfile.glob(
             os.path.join(self.data_dir, f"{split_name}.record-*")
         )
@@ -222,15 +324,32 @@ class KeypointsModel:
             dataset = dataset.cache()
         if train:
             dataset = dataset.shuffle(self.hp["shuffle_buffer_size"])
-        return dataset.map(_parse_function, num_parallel_calls=16), num_examples
+
+        dataset = dataset.map(
+            lambda example: tf.io.parse_single_example(example, features),
+            num_parallel_calls=16,
+        )
+
+        if self.hp["excluded_imagesets"]:
+            dataset = dataset.filter(
+                lambda parsed: tf.math.reduce_all(
+                    parsed["image/imageset"]
+                    != tf.convert_to_tensor(self.hp["excluded_imagesets"])
+                )
+            )
+
+        dataset = dataset.filter(
+            lambda parsed: len(parsed["image/object/bbox/xmin"].values) > 0
+        )
+        return dataset.map(_parse_function, num_parallel_calls=16)
 
     def train(self, logdir, experiment=None):
-        train_dataset, num_train = self._get_dataset("train", True)
-        train_dataset = train_dataset.batch(self.hp["batch_size"]).repeat()
+        train_dataset = self._get_dataset("train", True)
+        train_dataset = train_dataset.batch(self.hp["batch_size"])
         if self.hp["prefetch_num_batches"]:
             train_dataset = train_dataset.prefetch(self.hp["prefetch_num_batches"])
-        val_dataset, num_val = self._get_dataset("test", False)
-        val_dataset = val_dataset.batch(self.hp["batch_size"]).repeat()
+        val_dataset = self._get_dataset("test", False)
+        val_dataset = val_dataset.batch(self.hp["batch_size"])
 
         # imgs, kps = list(train_dataset.take(1).as_numpy_iterator())[0]
         # for img, kp in zip(imgs, kps):
@@ -244,26 +363,7 @@ class KeypointsModel:
         #     cv2.imshow("test.png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         #     cv2.waitKey(0)
 
-        pose_error_callback = PoseErrorCallback(
-            self.keypoints_3d, self.crop_size, self.hp["pnp_focal_length"], experiment
-        )
         for i, phase in enumerate(self.hp["phases"]):
-            phase_logdir = os.path.join(logdir, f"phase_{i}")
-            model_path = os.path.join(phase_logdir, "model.h5")
-            model_path_latest = os.path.join(phase_logdir, "model-latest.h5")
-            callbacks = [
-                tf.keras.callbacks.TensorBoard(
-                    log_dir=phase_logdir, write_graph=False, profile_batch=0
-                ),
-                tf.keras.callbacks.ModelCheckpoint(
-                    model_path, monitor="val_loss", save_best_only=True, mode="min"
-                ),
-                tf.keras.callbacks.ModelCheckpoint(
-                    model_path_latest, save_best_only=False,
-                ),
-                pose_error_callback,
-            ]
-
             # if this is the first phase, generate a new model with fresh weights.
             # otherwise, load the model from the previous phase's best checkpoint
             if i == 0:
@@ -283,6 +383,42 @@ class KeypointsModel:
                 layer.trainable = True
             print(model.summary())
 
+            def schedule(epoch):
+                curr_stage = next(
+                    stage for stage in phase["lr_schedule"] if epoch < stage["epoch"]
+                )
+                i = phase["lr_schedule"].index(curr_stage)
+                prev_epoch = phase["lr_schedule"][i - 1]["epoch"] if i > 0 else 0
+                return curr_stage["lr"] * tf.math.exp(
+                    tf.cast(curr_stage["exp"] * (prev_epoch - epoch), tf.float32)
+                )
+
+            phase_logdir = os.path.join(logdir, f"phase_{i}")
+            model_path = os.path.join(phase_logdir, "model.h5")
+            model_path_latest = os.path.join(phase_logdir, "model-latest.h5")
+            pose_error_callback = PoseErrorCallback(
+                model,
+                self.keypoints_3d,
+                self.crop_size,
+                self.hp["pnp_focal_length"],
+                real_image_dir=self.hp.get("real_image_dir"),
+                experiment=experiment,
+            )
+            callbacks = [
+                tf.keras.callbacks.TensorBoard(
+                    log_dir=phase_logdir, write_graph=False, profile_batch=0
+                ),
+                tf.keras.callbacks.ModelCheckpoint(
+                    model_path, monitor="val_loss", save_best_only=True, mode="min"
+                ),
+                tf.keras.callbacks.ModelCheckpoint(
+                    model_path_latest,
+                    save_best_only=False,
+                ),
+                tf.keras.callbacks.LearningRateScheduler(schedule),
+                pose_error_callback,
+            ]
+
             optimizer = self.OPTIMIZERS[phase["optimizer"]](**phase["optimizer_args"])
             model.compile(
                 optimizer=optimizer,
@@ -292,10 +428,10 @@ class KeypointsModel:
             try:
                 model.fit(
                     train_dataset,
-                    epochs=phase["epochs"],
-                    steps_per_epoch=num_train // self.hp["batch_size"],
+                    epochs=phase["lr_schedule"][-1]["epoch"],
+                    # steps_per_epoch=num_train // self.hp["batch_size"],
                     validation_data=val_dataset,
-                    validation_steps=num_val // self.hp["batch_size"],
+                    # validation_steps=num_val // self.hp["batch_size"],
                     callbacks=callbacks,
                 )
             except Exception:
@@ -318,7 +454,7 @@ class KeypointsModel:
             pooling=None,
             alpha=1.0,
         )
-        x = mobilenet.get_layer("block_15_add").output
+        x = mobilenet.get_layer("block_16_project_BN").output
 
         # 7x7x160 -> 14x14x96
         x = tf.keras.layers.Conv2DTranspose(
@@ -335,32 +471,32 @@ class KeypointsModel:
         )
 
         # 14x14x96 -> 28x28x32
-        x = tf.keras.layers.Conv2DTranspose(
-            filters=32, kernel_size=3, strides=2, padding="same", use_bias=False
-        )(x)
-        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-        x = tf.keras.layers.ReLU(6.0)(x)
-        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_5_add").output])
-        x = _inverted_res_block(
-            x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=19
-        )
-        x = _inverted_res_block(
-            x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=20
-        )
-
-        # 28x28x32 -> 56x56x24
-        x = tf.keras.layers.Conv2DTranspose(
-            filters=24, kernel_size=3, strides=2, padding="same", use_bias=False
-        )(x)
-        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-        x = tf.keras.layers.ReLU(6.0)(x)
-        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_2_add").output])
-        x = _inverted_res_block(
-            x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=21
-        )
-        x = _inverted_res_block(
-            x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=22
-        )
+        # x = tf.keras.layers.Conv2DTranspose(
+        #     filters=32, kernel_size=3, strides=2, padding="same", use_bias=False
+        # )(x)
+        # x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+        # x = tf.keras.layers.ReLU(6.0)(x)
+        # x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_5_add").output])
+        # x = _inverted_res_block(
+        #     x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=19
+        # )
+        # x = _inverted_res_block(
+        #     x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=20
+        # )
+        #
+        # # 28x28x32 -> 56x56x24
+        # x = tf.keras.layers.Conv2DTranspose(
+        #     filters=24, kernel_size=3, strides=2, padding="same", use_bias=False
+        # )(x)
+        # x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+        # x = tf.keras.layers.ReLU(6.0)(x)
+        # x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_2_add").output])
+        # x = _inverted_res_block(
+        #     x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=21
+        # )
+        # x = _inverted_res_block(
+        #     x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=22
+        # )
 
         x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
 

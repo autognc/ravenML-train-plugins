@@ -1,1 +1,1 @@
-from . import data, pose, model
+from . import data, pose, model, vis
