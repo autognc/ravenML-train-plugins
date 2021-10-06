@@ -39,7 +39,7 @@ setup(
     install_requires=[
         'numpy==1.16.4',
         'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
-        'slim @ https://github.com/autognc/object-detection/tarball/slim-v2#slim-v2',
+        #'slim @ https://github.com/autognc/object-detection/tarball/slim-v2#slim-v2',
         'matplotlib==3.1.1',
         'contextlib2==0.5.5',
         'pillow==6.1.0',
