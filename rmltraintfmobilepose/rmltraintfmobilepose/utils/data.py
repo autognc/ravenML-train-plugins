@@ -11,7 +11,7 @@ def recursive_map_dict(d, f):
     return f(d)
 
 
-def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=None):
+def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=None, object_name="cygnus"):
     """
     Get a Tensorflow dataset that generates samples from a directory with test data
     that is not in TFRecord format (i.e. a directory with image_*.png and meta_*.json files).
@@ -24,8 +24,7 @@ def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=
 
     def parse(metadata, img_id):
         parsed = {
-            # TODO don't hardcode key, maybe
-            "bbox": metadata["bboxes"]["cygnus"],
+            "bbox": metadata["bboxes"][object_name],
             "pose": metadata["pose"],
             "translation": metadata["translation"],
             "image_id": img_id,
@@ -47,6 +46,8 @@ def dataset_from_directory(dir_path, crop_size, nb_keypoints=None, focal_length=
                 metadata = json.load(f)
             img_id = os.path.basename(image_file).split("_")[1].split(".")[0]
             if not metadata["bboxes"]:
+                continue
+            if not metadata["bboxes"].get(object_name):
                 continue
             metadata = parse(metadata, img_id)
             yield image_file, metadata

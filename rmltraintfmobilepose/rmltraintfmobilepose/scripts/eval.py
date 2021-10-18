@@ -23,6 +23,7 @@ def make_serializable(n):
 @click.command(help="Evaluate a model (Keras .h5 format).")
 @click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.argument("object_name", type=str)
 @click.option(
     "-k",
     "--keypoints",
@@ -53,7 +54,7 @@ def make_serializable(n):
     type=click.Path(file_okay=False),
     help="Directory to store keypoint renders (optional)",
 )
-def main(model_path, directory, keypoints, focal_length, flip, num, output, render):
+def main(model_path, directory, object_name, keypoints, focal_length, flip, num, output, render):
     if render:
         os.makedirs(render, exist_ok=True)
 
@@ -70,7 +71,7 @@ def main(model_path, directory, keypoints, focal_length, flip, num, output, rend
     ref_points = np.load(keypoints_path).reshape((-1, 3))[:nb_keypoints]
 
     data = utils.data.dataset_from_directory(
-        directory, crop_size, nb_keypoints=nb_keypoints, focal_length=focal_length
+        directory, crop_size, nb_keypoints=nb_keypoints, focal_length=focal_length, object_name=object_name,
     )
     if num:
         data = data.take(num)

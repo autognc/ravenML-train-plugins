@@ -14,6 +14,7 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         ref_points,
         crop_size,
         focal_length,
+        object_name,
         real_image_dir=None,
         experiment=None,
     ):
@@ -31,7 +32,7 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         self.real_image_dataset = []
         if real_image_dir:
             self.real_image_dataset = utils.data.dataset_from_directory(
-                real_image_dir, crop_size, len(ref_points)
+                real_image_dir, crop_size, len(ref_points), object_name
             ).batch(32)
 
     def assign_metric(self, y_true, y_pred):
@@ -401,6 +402,7 @@ class KeypointsModel:
                 self.keypoints_3d,
                 self.crop_size,
                 self.hp["pnp_focal_length"],
+                object_name=self.hp.get("object_name", "cygnus"),
                 real_image_dir=self.hp.get("real_image_dir"),
                 experiment=experiment,
             )
