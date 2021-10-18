@@ -16,7 +16,7 @@ Here's an example config (`train_config.json`) that should be passed to all comm
     "comments": "Training model."
   },
   "plugin": {
-    "object_name": cygnus
+    "object_name": "cygnus"
     "keypoints": 20,
     "batch_size": 64,
     "cache_train_data": false,
