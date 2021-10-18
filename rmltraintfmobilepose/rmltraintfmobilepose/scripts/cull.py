@@ -309,6 +309,8 @@ cull_mask_generators = {
 @click.command(help="Train/Use CullNet")
 @click.argument("model_path", type=click.Path(exists=True, dir_okay=False))
 @click.argument("directory", type=click.Path(exists=True, file_okay=False))
+@click.argument("object_name", type=str)
+@click.argument("stl_path", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "-k",
     "--keypoints",
@@ -328,7 +330,7 @@ cull_mask_generators = {
     default=next(iter(cull_error_metrics)),
 )
 @click.option(
-    "-k",
+    "-n",
     "--mask_mode",
     type=click.Choice(cull_mask_generators.keys(), case_sensitive=False),
     default=next(iter(cull_mask_generators)),
@@ -348,6 +350,8 @@ cull_mask_generators = {
 def main(
     model_path,
     directory,
+    object_name,
+    stl_path,
     keypoints,
     focal_length,
     error_metric,
@@ -370,9 +374,9 @@ def main(
         print("Using", model_path, "to generate cullnet training data...")
         mask_gen_init = cull_mask_generators[mask_mode]
         # TODO make hardcoded stuff into options
-        mask_gen = mask_gen_init("Cygnus_ENHANCED.stl", size=model.input.shape[1])
+        mask_gen = mask_gen_init(stl_path, size=model.input.shape[1])
         X, y, true_rot_error = compute_model_error_training_data(
-            model, directory, ref_points, focal_length, error_func, mask_gen
+            model, directory, ref_points, focal_length, error_func, mask_gen, object_name
         )
         if cache:
             np.save("cull-masks." + cache, X)
@@ -529,7 +533,7 @@ def _project_adjusted(
 
 
 def compute_model_error_training_data(
-    model, directory, ref_points, default_focal_length, error_func, mask_gen
+    model, directory, ref_points, default_focal_length, error_func, mask_gen, object_name
 ):
     nb_keypoints = model.output.shape[-1] // 2
     cropsize = model.input.shape[1]
@@ -540,6 +544,7 @@ def compute_model_error_training_data(
         cropsize,
         nb_keypoints=nb_keypoints,
         focal_length=default_focal_length,
+        object_name=object_name
     )
     data = data.batch(32)
 
