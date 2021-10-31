@@ -58,19 +58,19 @@ def train(ctx, train: TrainInput, comet):
 
     experiment = None
     comet = hps.get("comet")
+
     if comet:
         experiment = Experiment(
             workspace="seeker-rd", 
             project_name="cullnet-error-prediction",
-            auto_metric_logging=True,
-            auto_param_logging=True,
-            log_graph=True,
+            #auto_metric_logging=True,
+            #auto_param_logging=True,
+            #log_graph=True,
         )
         experiment.set_name(comet)
         experiment.log_parameters(hps)
         experiment.set_os_packages()
         experiment.set_pip_packages()
-
     # run training
     print("Beginning training. Hyperparameters:")
     print(json.dumps(hps, indent=2))

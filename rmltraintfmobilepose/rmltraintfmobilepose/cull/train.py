@@ -97,7 +97,7 @@ def train_cullnet(
         model_name = model_type + "-" + str(int(time.time()))
         cull_model = cull_models[model_type](X.shape[1:], model)
         cull_model, cull_model_path = train_model(
-            model_name, cull_model, X_train, y_train, X_test, y_test, hps["batch_size"], hps["epochs"]
+            model_name, artifact_dir, cull_model, X_train, y_train, X_test, y_test, hps["batch_size"], hps["epochs"]
         )
     else:
         print("Using pretrained cullnet...", eval_trained_cull_model)
@@ -156,7 +156,7 @@ def train_cullnet(
     return Path(cull_model_path), extra_files
 
 def train_model(model_name, artifact_dir, model, X_train, y_train, X_test, y_test, batch_size, epochs):
-    save_name = artifact_dir / model_name + "-best.h5"
+    save_name = artifact_dir / (model_name + "-best.h5")
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             save_name,
