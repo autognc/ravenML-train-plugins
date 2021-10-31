@@ -113,8 +113,8 @@ def train_cullnet(
         cull_model_path = eval_trained_cull_model
         cull_model = tf.keras.models.load_model(eval_trained_cull_model)
     if experiment:
-        print(cull_model_path)
         experiment.log_model(f"cullnet",str(cull_model_path))
+    extra_files.append(cull_model_path)
     ynorm_pred = cull_model.predict(X).squeeze()
     ynorm_test_pred = cull_model.predict(X_test).squeeze()
 
