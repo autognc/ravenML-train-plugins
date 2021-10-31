@@ -53,7 +53,7 @@ def train(ctx, train: TrainInput, comet):
         raise ValueError("No valid path to keypoints.npy file supplied")
     hps = prepare_for_training(hps)
     # fill metadata
-    train.plugin_metadata["architecture"] = "keypoints_regression"
+    train.plugin_metadata["architecture"] = "cullnet"
     train.plugin_metadata["config"] = hps
 
     experiment = None
