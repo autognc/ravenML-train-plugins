@@ -13,7 +13,7 @@ setup(
         "opencv-python",  # ==4.2.0.34',
         "tqdm",  # ==4.36.1',
         "matplotlib",  # ==2.2.2',
-        "comet-ml",  # ==3.1.11',
+        "comet-ml==3.19.1",
         "moderngl",
     ],
     entry_points="""

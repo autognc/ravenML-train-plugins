@@ -63,9 +63,9 @@ def train(ctx, train: TrainInput, comet):
         experiment = Experiment(
             workspace="seeker-rd", 
             project_name="cullnet-error-prediction",
-            #auto_metric_logging=True,
-            #auto_param_logging=True,
-            #log_graph=True,
+            auto_metric_logging=True,
+            auto_param_logging=True,
+            log_graph=True,
         )
         experiment.set_name(comet)
         experiment.log_parameters(hps)
@@ -93,7 +93,5 @@ def train(ctx, train: TrainInput, comet):
             experiment,
             hps,
         )
-    if experiment:
-        experiment.end()
 
     return TrainOutput(model_path, extra_files)

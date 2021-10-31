@@ -107,7 +107,8 @@ def train_cullnet(
         cull_model_path = eval_trained_cull_model
         cull_model = tf.keras.models.load_model(eval_trained_cull_model)
     if experiment:
-        experiment.log_model(f"{model_type}_{mask_mode}-best",cull_model_path)
+        print(cull_model_path)
+        experiment.log_model(f"cullnet",str(cull_model_path))
     ynorm_pred = cull_model.predict(X).squeeze()
     ynorm_test_pred = cull_model.predict(X_test).squeeze()
 
@@ -128,7 +129,7 @@ def train_cullnet(
         print(pred_name, "l2=", l2_pred, "r=", corr_pred)
         axis.scatter(data[0], data[1])
         axis.set_title(pred_name)
-    plot_path = artifact_dir / "cull-" + model_name + "-predictions.png"
+    plot_path = artifact_dir / ("cull-" + model_name + "-predictions.png")
     extra_files.append(plot_path)
     plt.savefig(plot_path)
     if experiment:
