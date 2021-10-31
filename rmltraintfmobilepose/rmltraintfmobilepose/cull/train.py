@@ -36,14 +36,17 @@ def train_cullnet(
     extra_files = []
     model = tf.keras.models.load_model(model_path, compile=False)
     # print(model.summary())
-
+    cache = Path(cache)
+    cull_masks_paths = cache /"cull-masks.npy"
+    cull_error_cache = cache /"cull-errors.npy"
+    cull_true_rot_path = cache /"cull-true_rot_error.npy"
     keypoints_path = (
         keypoints if keypoints else os.path.join(directory, "keypoints.npy")
     )
     ref_points = np.load(keypoints_path).reshape((-1, 3))
     error_func, error_norm, error_denorm = cull_error_metrics[error_metric]
 
-    if not cache or not os.path.exists("cull-masks." + cache):
+    if not os.path.exists(os.path.join(cache, "cull-masks.npy")):
         print("Using", model_path, "to generate cullnet training data...")
         mask_gen_init = cull_mask_generators[mask_mode]
         # TODO make hardcoded stuff into options
@@ -52,14 +55,17 @@ def train_cullnet(
             model, directory, ref_points, focal_length, error_func, mask_gen, object_name
         )
         if cache:
-            np.save("cull-masks." + cache, X)
-            np.save("cull-errors." + cache, y)
-            np.save("cull-true_rot_error." + cache, true_rot_error)
+            np.save(cull_masks_paths, X)
+            np.save(cull_error_cache , y)
+            np.save(cull_true_rot_path, true_rot_error)
     else:
         print("Using cached data...")
-        X, y, true_rot_error = np.load("cull-masks." + cache), np.load("cull-errors." + cache), np.load("cull-true_rot_error." + cache)
+        X, y, true_rot_error = np.load(cull_masks_paths), np.load(cull_error_cache), np.load(cull_true_rot_path)
     print("Loaded dataset: ", X.shape, " -> ", y.shape)
-
+    extra_files.append(keypoints_path)
+    extra_files.append(cull_masks_paths)
+    extra_files.append(cull_true_rot_path)
+    extra_files.append(cull_error_cache)
     # patch inf weirdness
     y = np.clip(y, np.amin(y), np.nanmax(y[y != np.inf]))
 

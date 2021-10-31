@@ -6,6 +6,7 @@ import numpy as np
 import click
 import json
 import os
+from pathlib import Path
 from .train import train_cullnet
 from .. import scripts
 import pkgutil
@@ -52,6 +53,9 @@ def train(ctx, train: TrainInput, comet):
     if not os.path.exists(keypoints_path):
         raise ValueError("No valid path to keypoints.npy file supplied")
     hps = prepare_for_training(hps)
+
+    cache = Path(hps.get("cache", artifact_dir))
+    os.makedirs(cache, exist_ok=True)
     # fill metadata
     train.plugin_metadata["architecture"] = "cullnet"
     train.plugin_metadata["config"] = hps
@@ -89,7 +93,7 @@ def train(ctx, train: TrainInput, comet):
             hps["mask_mode"],
             hps["model_type"],
             hps.get("eval_trained_cull_model"),
-            hps.get("cache"),
+            cache,
             experiment,
             hps,
         )
