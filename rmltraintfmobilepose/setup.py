@@ -19,5 +19,6 @@ setup(
     entry_points="""
         [ravenml.plugins.train]
         tf_mobilepose=rmltraintfmobilepose.core:tf_mobilepose
+        tf_cullnet=rmltraintfmobilepose.cull.core:tf_cullnet
     """,
 )

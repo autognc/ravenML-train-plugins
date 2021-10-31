@@ -1,0 +1,21 @@
+
+dataset: tinycygnusdistractors
+overwrite_local: False
+ec2_policy: stop
+metadata:
+    created_by: Kevin Black
+    comments: no thanks
+plugin:
+    batch_size: 5
+    epochs: 100
+    cache_train_data: False
+    #comet: none
+    #model_path: 12312
+    #object_name: cygnus
+    #model_type: from_pose
+    #error_metric: keypoint_l2
+    #mask_mode: opengl_cut
+    #cache:
+    #stl_path: /home/jdeutsch/starfish-scripts/Cygnus_Enhanced.stl
+    pnp_focal_length: 1422.2222222
+    dropout: 0.0
