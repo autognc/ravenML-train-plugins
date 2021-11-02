@@ -4,3 +4,13 @@ Momentum:
     learning_rate_base: 0.008
     momentum_optimizer_value: 0.9
     batch_size: 10
+Adam:
+    num_classes: 1
+    train_steps: 140000
+    initial_learning_rate: 0.001
+    first_schedule_steps: 90000
+    first_schedule_lr: 0.0001
+    second_schedule_steps: 120000
+    second_schedule_lr: 0.00001
+    epsilon: 0.0000001
+    batch_size : 10
