@@ -39,7 +39,7 @@ def get_image_dataset(dir_path, rescale=1.0, gaussian_stddev=0.0):
             img = tf.image.resize(img, dims)
         return tf.cast(img, tf.float32)
 
-    image_files = sorted(glob.glob(os.path.join(dir_path, "image_*")))
+    image_files = sorted(glob.glob(os.path.join(dir_path, "img*")))
     image_dataset = tf.data.Dataset.from_tensor_slices(image_files).map(image_parser, num_parallel_calls=16)
     return image_dataset
 
