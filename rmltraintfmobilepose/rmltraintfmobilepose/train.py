@@ -454,7 +454,6 @@ class KeypointsModel:
             weights=init_weights,
             input_shape=(self.crop_size, self.crop_size, 3),
             pooling=None,
-            alpha=1.0,
         )
         x = mobilenet.get_layer("block7a_project_bn").output
 
