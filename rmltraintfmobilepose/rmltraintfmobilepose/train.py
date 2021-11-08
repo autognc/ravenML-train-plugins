@@ -369,6 +369,9 @@ class KeypointsModel:
             # otherwise, load the model from the previous phase's best checkpoint
             if i == 0:
                 model = self._gen_model()
+                assert os.path.isfile(self.hp.get("model_checkpoint_path"))
+                if self.hp.get("model_checkpoint_path"):
+                    model.load_weights(self.hp.get("model_checkpoint_path"))
             else:
                 model = tf.keras.models.load_model(
                     os.path.join(logdir, f"phase_{i - 1}", "model.h5"), compile=False
@@ -456,9 +459,7 @@ class KeypointsModel:
             input_shape=(self.crop_size, self.crop_size, 3),
             pooling=None,
         )
-        if self.hp.get("model_checkpoint_path"):
-            assert os.path.isfile(self.hp.get("model_checkpoint_path"))
-            mobilenet.load_weights(self.hp.get("model_checkpoint_path"))
+        
         x = mobilenet.get_layer("block7a_project_bn").output
 
         # 7x7x160 -> 14x14x112
