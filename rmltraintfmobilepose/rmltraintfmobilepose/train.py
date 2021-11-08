@@ -449,12 +449,16 @@ class KeypointsModel:
     def _gen_model(self):
         init_weights = self.hp.get("model_init_weights", "")
         assert init_weights in ["imagenet", ""]
+        
         mobilenet = tf.keras.applications.EfficientNetB0(
             include_top=False,
             weights=init_weights,
             input_shape=(self.crop_size, self.crop_size, 3),
             pooling=None,
         )
+        if self.hp.get("model_checkpoint_path"):
+            assert os.path.isfile(self.hp.get("model_checkpoint_path"))
+            mobilenet.load_weights(self.hp.get("model_checkpoint_path"))
         x = mobilenet.get_layer("block7a_project_bn").output
 
         # 7x7x160 -> 14x14x112
