@@ -49,10 +49,10 @@ def train_cullnet(
     if not os.path.exists(os.path.join(cache, "cull-masks.npy")):
         print("Using", model_path, "to generate cullnet training data...")
         mask_gen_init = cull_mask_generators[mask_mode]
-        # TODO make hardcoded stuff into options
+        train_dir = directory / "splits" / "complete" / "train"
         mask_gen = mask_gen_init(stl_path, size=model.input.shape[1])
         X, y, true_rot_error = compute_model_error_training_data(
-            model, directory, ref_points, focal_length, error_func, mask_gen, object_name
+            model, train_dir, ref_points, focal_length, error_func, mask_gen, object_name
         )
         if cache:
             np.save(cull_masks_paths, X)
