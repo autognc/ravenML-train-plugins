@@ -23,9 +23,9 @@ class MaskGenerator:
         )
         assert mask.shape[:2] == image.shape[:2]
         # code for spot-checking masks
-        # cv2.imshow("image", (image * 127.5 + 127.5).astype(np.uint8))
+        cv2.imwrite("image.png", (image * 127.5 + 127.5).astype(np.uint8))
         # cv2.waitKey(0)
-        # cv2.imshow("mask", (mask * 255).astype(np.uint8))
+        cv2.imwrite("mask.png", (mask * 255).astype(np.uint8))
         # cv2.waitKey(0)
         if self.stack:
             w, h, c = image.shape
@@ -97,7 +97,7 @@ class OpenGLMaskProjector(MaskGenerator):
 
         verts = load_stl(stl_path)
 
-        ctx = moderngl.create_context(standalone=True)
+        ctx = moderngl.create_context(standalone=True, backend="egl")
 
         self.prog = ctx.program(
             vertex_shader=self.VERTEX_SHADER,

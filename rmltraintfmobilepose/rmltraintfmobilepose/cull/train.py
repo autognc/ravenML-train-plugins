@@ -271,7 +271,7 @@ def compute_model_error_training_data(
                 image, r_vec, t_vec, truth["focal_length"], extra_crop_params
             )
             inputs.append(img_mask)
-
+            cv2.imwrite("trash/mask.png",img_mask*255)
             if "keypoints" not in truth:
                 unscaled_kps = derive_keypoints(truth, ref_points)
             else:

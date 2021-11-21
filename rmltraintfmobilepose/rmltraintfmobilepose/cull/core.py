@@ -57,7 +57,7 @@ def train(ctx, train: TrainInput, comet):
     cache = Path(hps.get("cache", artifact_dir))
     os.makedirs(cache, exist_ok=True)
     # fill metadata
-    train.plugin_metadata["architecture"] = "cullnet"
+    train.plugin_metadata["architecture"] = f"cullnet_{hps['model_type']}"
     train.plugin_metadata["config"] = hps
 
     experiment = None
