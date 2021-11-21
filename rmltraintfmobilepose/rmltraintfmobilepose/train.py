@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import traceback
-from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
+from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
 import os
 from . import utils
 import cv2
@@ -369,8 +369,8 @@ class KeypointsModel:
             # otherwise, load the model from the previous phase's best checkpoint
             if i == 0:
                 model = self._gen_model()
-                assert os.path.isfile(self.hp.get("model_checkpoint_path"))
                 if self.hp.get("model_checkpoint_path"):
+                    assert os.path.isfile(self.hp.get("model_checkpoint_path"))
                     model.load_weights(self.hp.get("model_checkpoint_path"))
             else:
                 model = tf.keras.models.load_model(
@@ -453,14 +453,13 @@ class KeypointsModel:
         init_weights = self.hp.get("model_init_weights", "")
         assert init_weights in ["imagenet", ""]
         
-        mobilenet = tf.keras.applications.EfficientNetB0(
+        mobilenet = tf.keras.applications.MobileNetV3Large(
             include_top=False,
             weights=init_weights,
             input_shape=(self.crop_size, self.crop_size, 3),
             pooling=None,
         )
-        
-        x = mobilenet.get_layer("block7a_project_bn").output
+        x = mobilenet.get_layer("expanded_conv_14/Add").output
 
         # 7x7x160 -> 14x14x112
         x = tf.keras.layers.Conv2DTranspose(
@@ -468,14 +467,14 @@ class KeypointsModel:
         )(x)
         x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
         x = tf.keras.layers.ReLU(6.0)(x)
-        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block5b_add").output])
+        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("expanded_conv_11/Add").output])
+        
         x = _inverted_res_block(
-            x, filters=112, alpha=1.0, stride=1, expansion=6, block_id=17
+            x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=17
         )
         x = _inverted_res_block(
-            x, filters=112, alpha=1.0, stride=1, expansion=6, block_id=18
+            x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=18
         )
-
         # 14x14x96 -> 28x28x32
         # x = tf.keras.layers.Conv2DTranspose(
         #     filters=32, kernel_size=3, strides=2, padding="same", use_bias=False
