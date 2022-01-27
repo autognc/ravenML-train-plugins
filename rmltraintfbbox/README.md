@@ -36,9 +36,13 @@ plugin:
         train_steps: 1000
 ```
 
-|Parameter | Descreption                                                      |
+|Parameter | Description                                                      |
 |----------|------------------------------------------------------------------|
 |Metadata  | Fill out author information and description of the training      |
+|Verbose   | (T/F)Print out verbose description of training informatoin       |
+|Comet     | (T/F) Send data to be plotted/recorded by comet.ml               |
+|Optimizer | name of the optimizer to be used                                 |
+
 
 
 
