@@ -35,12 +35,12 @@ plugin:
     hyperparameters:
         train_steps: 1000
 ```
-|----------|---------------------------------|
-|Parameter | Descreption---------------------|
-|----------|---------------------------------|
-|Metadata  | Fill out author information and |
-|          | description of the training     |
-|----------|---------------------------------|
+
+|Parameter | Descreption------------------------------------------------------|
+|----------|------------------------------------------------------------------|
+|Metadata  | Fill out author information and description of the training      |
+
+
 
 ## To train a model:
 ```bash
