@@ -36,7 +36,7 @@ plugin:
         train_steps: 1000
 ```
 
-|Parameter | Descreption------------------------------------------------------|
+|Parameter | Descreption                                                      |
 |----------|------------------------------------------------------------------|
 |Metadata  | Fill out author information and description of the training      |
 
