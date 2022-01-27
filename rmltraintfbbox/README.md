@@ -2,13 +2,13 @@ NOTE: The schema.json and scheme.py are prototypes, not used currently.
 # rmltraintfbbox
 This plugin is used to interface with the tensorflow object detection api.   
 It's main use is to train bounding box models on datasets created using the tfrecord plugin.
-
+## Installation
 To install cd into the same directory as this ReadME and follow these commands:
 ```bash
 conda activate ravenml
 pip install -e .
 ```
-##Sample Config - .yml file
+## Sample Config - .yml file
 ```
 # This sample config contains all fields supported by ravenML core and the bbox plugin.
 # Plugin specific configuration is located in the plugin field.
@@ -37,7 +37,7 @@ plugin:
 ```
 
 
-To train a model:
+## To train a model:
 ```bash
 conda activate ravenml
 ravenml train -c <path to config yml file> tf-bbox train
