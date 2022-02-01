@@ -36,12 +36,13 @@ plugin:
         train_steps: 1000
 ```
 
-|Parameter | Description                                                      |
+|Parameter || Description                                                      |
 |----------|------------------------------------------------------------------|
-|Metadata  | Fill out author information and description of the training      |
-|Verbose   | (T/F)Print out verbose description of training informatoin       |
-|Comet     | (T/F) Send data to be plotted/recorded by comet.ml               |
-|Optimizer | name of the optimizer to be used                                 |
+|Metadata  | string|Fill out author information and description of the training      |
+|Verbose   | bool(True/False) |Print out verbose description of training informatoin       |
+|Comet     | string | Name of comet experiment. If not specified, comet will not be used               |
+|Model | string | name of the model to be trained (see table below for options)                                 |
+|Optimizer | string | name of the optimizer to be used   (see table below for options)                             |
 
 
 
