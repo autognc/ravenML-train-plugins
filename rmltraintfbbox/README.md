@@ -9,7 +9,7 @@ conda activate ravenml
 pip install -e .
 ```
 ## Sample Config - .yml file
-```
+```yaml
 # This sample config contains all fields supported by ravenML core and the bbox plugin.
 # Plugin specific configuration is located in the plugin field.
 
@@ -35,17 +35,25 @@ plugin:
     hyperparameters:
         train_steps: 1000
 ```
-
-|Parameter || Description                                                      |
-|----------|------------------------------------------------------------------|
-|Metadata  | string|Fill out author information and description of the training      |
-|Verbose   | bool(True/False) |Print out verbose description of training informatoin       |
-|Comet     | string | Name of comet experiment. If not specified, comet will not be used               |
-|Model | string | name of the model to be trained (see table below for options)                                 |
-|Optimizer | string | name of the optimizer to be used   (see table below for options)                             |
-
-
-
+  
+## Config File Options
+|Parameter |Type| Description                                                      |
+|----------|---|------------------------------------------------------------------|
+|metadata  | string|Fill out author information and description of the training      |
+|verbose   | bool(True/False) |Print out verbose description of training informatoin       |
+|comet     | string | Name of comet experiment. If not specified, comet will not be used               |
+|model | string | name of the model to be trained (see table below for options)                                 |
+|optimizer | string | name of the optimizer to be used   (see table below for options)                             |
+|use_default_config | bool(True/False) | Use default hyperparameters   (see ./rmltraintfbbox/utils/model_defaults/<model_name>.yml for defaults) |
+|hyperparameters | key/value pairs | Hyperparameters to modify and their values   (see ./rmltraintfbbox/utils/model_defaults/<model_name>.yml for defaults and hyperparameter options for each model/optimizer pair) |
+  
+## Model Options
+|Model|Optimizer|Hyperparameter Options|
+|---|---|---|
+||||
+||||
+||||
+||||
 
 ## To train a model:
 ```bash
