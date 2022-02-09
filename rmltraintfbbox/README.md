@@ -50,7 +50,14 @@ plugin:
 ## Model Options
 |Model|Optimizer|Hyperparameter Options|
 |---|---|---|
-||||
+|ssd_mobilenet_v2_coco|Adam|train_steps: 45000
+        batch_size: 24
+        dropout_keep_probability: 0.6
+        first_schedule_steps: 22000
+        second_schedule_steps: 35000
+        initial_learning_rate: 0.001
+        first_schedule_lr: 0.0001
+        second_schedule_lr: 0.00001
 ||||
 ||||
 ||||
