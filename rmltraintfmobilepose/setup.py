@@ -9,7 +9,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "numpy",  # ==1.18.4',
-        "tensorflow==2.3.0",
+        "tensorflow==2.5.3",
         "opencv-python",  # ==4.2.0.34',
         "tqdm",  # ==4.36.1',
         "matplotlib",  # ==2.2.2',
