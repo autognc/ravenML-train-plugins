@@ -50,7 +50,7 @@ plugin:
 ## Model Options
 |Model|Optimizer|Hyperparameter Options|
 |---|---|---|
-|ssd_mobilenet_v2_coco|Adam|[relative link]sample_configs/busek_bbox_sample.yml
+|ssd_mobilenet_v2_coco|Adam|[a relative link](sample_configs/busek_bbox_sample.yml)
 |ssd_mobilenet_v2_coco|RMSProp|example doc to come|
 ## To train a model:
 ```bash
