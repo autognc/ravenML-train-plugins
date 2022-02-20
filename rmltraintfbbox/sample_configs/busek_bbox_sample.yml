@@ -1,0 +1,29 @@
+# This sample config contains all fields supported by ravenML core and the bbox plugin.
+# Plugin specific configuration is located in the plugin field.
+
+# This config contains the typical hyperparameters used for training bbox models
+dataset: place_holder_data_set # the dataset should be in ~/.ravenML/datasets/<datasetname>
+#overwrite_local: True # if True will overwrite previous data
+ec2_policy: stop  ## uncomment if using ec2
+#artifact: ./bbox_training ## path to store training artifacts
+metadata:
+    created_by: jacob deutsch
+    comments: The best object detection model ever
+plugin:
+    evaluate: True
+    #comet: mobilenet_enhanced_cygnus ##uncomment if using comet
+    log_train_every: 50
+    log_eval_every: 500
+    model: ssd_mobilenet_v2_coco
+    optimizer: Adam
+    # NOTE: if use_default_config is true, hyperparameters are IGNORED
+    use_default_config: false
+    hyperparameters:
+        train_steps: 45000
+        batch_size: 24
+        dropout_keep_probability: 0.6
+        first_schedule_steps: 22000
+        second_schedule_steps: 35000
+        initial_learning_rate: 0.001
+        first_schedule_lr: 0.0001
+        second_schedule_lr: 0.00001
