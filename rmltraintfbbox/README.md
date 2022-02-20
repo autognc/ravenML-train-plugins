@@ -50,15 +50,8 @@ plugin:
 ## Model Options
 |Model|Optimizer|Hyperparameter Options|
 |---|---|---|
-|ssd_mobilenet_v2_coco|Adam|train_steps
-|||batch_size|
-|||dropout_keep_probability|
-|||first_schedule_steps|
-|||second_schedule_steps|
-||| initial_learning_rate|
-|||first_schedule_lr|
-|||second_schedule_lr|
-||RMSProp||
+|ssd_mobilenet_v2_coco|Adam|[relative link]sample_configs/busek_bbox_sample.yml
+|ssd_mobilenet_v2_coco|RMSProp|example doc to come|
 ## To train a model:
 ```bash
 conda activate ravenml
