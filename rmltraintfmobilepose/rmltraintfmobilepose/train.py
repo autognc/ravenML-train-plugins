@@ -2,6 +2,7 @@ import tensorflow as tf
 import numpy as np
 import traceback
 from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
+from tensorflow.python.keras.applications.efficientnet import block as efficientnet_block
 import os
 from . import utils
 import cv2
@@ -369,6 +370,9 @@ class KeypointsModel:
             # otherwise, load the model from the previous phase's best checkpoint
             if i == 0:
                 model = self._gen_model()
+                # assert os.path.isfile(self.hp.get("model_checkpoint_path"))
+                # if self.hp.get("model_checkpoint_path"):
+                #     model.load_weights(self.hp.get("model_checkpoint_path"))
             else:
                 model = tf.keras.models.load_model(
                     os.path.join(logdir, f"phase_{i - 1}", "model.h5"), compile=False
@@ -449,28 +453,32 @@ class KeypointsModel:
     def _gen_model(self):
         init_weights = self.hp.get("model_init_weights", "")
         assert init_weights in ["imagenet", ""]
-        mobilenet = tf.keras.applications.MobileNetV2(
+        
+        mobilenet = tf.keras.applications.EfficientNetB3(
             include_top=False,
-            weights=init_weights if init_weights != "" else None,
+            weights=init_weights,
             input_shape=(self.crop_size, self.crop_size, 3),
             pooling=None,
-            alpha=1.0,
         )
-        x = mobilenet.get_layer("block_16_project_BN").output
+        
+        x = mobilenet.get_layer("block7a_project_bn").output
 
-        # 7x7x160 -> 14x14x96
+        # 7x7x160 -> 14x14x112
         x = tf.keras.layers.Conv2DTranspose(
-            filters=96, kernel_size=3, strides=2, padding="same", use_bias=False
+            filters=112, kernel_size=3, strides=2, padding="same", use_bias=False
         )(x)
         x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
         x = tf.keras.layers.ReLU(6.0)(x)
-        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_12_add").output])
-        x = _inverted_res_block(
-            x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=17
+        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block5b_add").output])
+        x = efficientnet_block(
+            x, name='inverted_block_1', filters_in=224, filters_out=112, strides=1, expand_ratio=6#, block_id=17
         )
-        x = _inverted_res_block(
-            x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=18
+        x = efficientnet_block(
+            x, name='inverted_block_2', filters_in=112, filters_out=112, strides=1, expand_ratio=6#, block_id=17
         )
+        # x = _inverted_res_block(
+        #     x, filters=112, alpha=1.0, stride=1, expansion=6, block_id=18
+        # )
 
         # 14x14x96 -> 28x28x32
         # x = tf.keras.layers.Conv2DTranspose(
