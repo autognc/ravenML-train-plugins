@@ -7,20 +7,16 @@ import click
 import json
 import os
 from .train import HRNET
-from . import scripts
+
 import pkgutil
 import importlib
 import yaml
 from attrdict import AttrDict
-@click.group(help="TensorFlow Keypoints Regression.")
+import pytorch_lightning as pl
+
+@click.group(help="Pytorch Keypoints Regression.")
 def pt_hrnet():
     pass
-
-
-for _, name, _ in pkgutil.iter_modules(scripts.__path__):
-    pt_hrnet.add_command(
-        importlib.import_module(f"{scripts.__name__}.{name}").main, name=name
-    )
 
 
 @pt_hrnet.command(help="Train a model.")
@@ -73,11 +69,12 @@ def train(ctx, train: TrainInput, comet):
     # run training
     print("Beginning training. Hyperparameters:")
     print(json.dumps(hyperparameters, indent=2))
-    trainer = HRNET(data_dir, hyperparameters, keypoints_3d)
+    model = HRNET(hyperparameters, data_dir, artifact_dir, keypoints_3d)
+    trainer = pl.Trainer(gpus=1)
     with ExitStack() as stack:
         if experiment:
             stack.enter_context(experiment.train())
-        model_path = trainer.tune()
+        model_path = trainer.fit(model)
     if experiment:
         experiment.end()
 

@@ -30,7 +30,6 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
             if not os.path.exists(index_path):
                 subprocess.call(["python", "-m", "tfrecord.tools.tfrecord2idx", filename, index_path])
             splits[split_num] = 1/len(filenames)
-        print(filenames)
         features = {
             "image/height":"int",
             "image/width": "int",
@@ -48,17 +47,18 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
             index_pattern, 
             splits, 
             features,
-            shuffle_queue_size=self.hp.get("shuffle_buffer_size", 1000)
+            shuffle_queue_size=self.hp.get("shuffle_buffer_size", 1000),
+            infinite=False
         ))
         self.heatmap_generator = [
             HeatmapGenerator(
-                output_size, self.nb_keypoints, self.hp['sigma']
-            ) for output_size in self.hp["output_size"]
+                output_size, self.nb_keypoints, self.hp.dataset.sigma
+            ) for output_size in self.hp.dataset.output_size
         ]
         self.transforms = T.Compose([
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            T.Resize(self.hp["input_size"])
+            T.Resize(self.hp.dataset.input_size)
         ])
     
     def __iter__(self):

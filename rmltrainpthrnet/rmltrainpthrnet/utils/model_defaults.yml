@@ -1,3 +1,4 @@
+VERBOSE: True
 MODEL:
   EXTRA:
     FINAL_CONV_KERNEL: 1
@@ -58,12 +59,8 @@ MODEL:
   TAG_PER_JOINT: False
 dataset:
   sigma: 2
-  flip: 0.5
   input_size: 512
   output_size: [128, 256]
-  max_rotation: 30
-  max_scale: 1.5
   scale_type: 'short'
-  max_translate: 40
-  min_scale: 0.75
   num_joints: 20
+  num_workers: 8

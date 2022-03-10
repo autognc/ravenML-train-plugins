@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 ## define trainer here
 
-## TODO: optimizer options, model options, validation from direction, set step pose error, comet logging
+## TODO: optimizer options, model options, validation from directory, val step pose error, comet logging
 class HRNET(pl.LightningModule):
 
     def __init__(self, hp, data_dir, artifact_dir, keypoints_3d):
@@ -24,19 +24,19 @@ class HRNET(pl.LightningModule):
         self.artifact_dir = artifact_dir
         self.keypoints_3d = keypoints_3d[: self.nb_keypoints]
         self.model = get_pose_net(self.hp, True)
-        self.loss = MultiHeatMapLoss()
+        self.loss = MultiHeatMapLoss(self.nb_keypoints)
     
     def forward(self, images):  
         return self.model(images)
     
     def train_dataloader(self):
         ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "train")
-        loader = torch.utils.data.DataLoader(ds, batch_size=self.hp["batch_size"])
+        loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=self.hp["batch_size"])
         return loader
 
     def test_dataloader(self):
         ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "test")
-        loader = torch.utils.data.DataLoader(ds, batch_size=1)
+        loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=1)
         return loader
 
     def configure_optimizers(self):
@@ -48,9 +48,23 @@ class HRNET(pl.LightningModule):
         images, heatmaps = batch
         heatmaps = list(map(lambda x: x.cuda(non_blocking=True), heatmaps))
         y_hat = self.model(images)
-        loss = self.loss(y_hat, heatmaps)
-        self.log("train_loss", loss)
-        return loss
+        losses = self.loss(y_hat, heatmaps)
+        total_loss = 0
+        for loss in losses:
+            total_loss += loss.mean(dim=0)
+        self.log("train_loss", total_loss)
+        return total_loss
+    
+    def test_step(self, batch, batch_idx):
+        images, heatmaps = batch
+        heatmaps = list(map(lambda x: x.cuda(non_blocking=True), heatmaps))
+        y_hat = self.model(images)
+        losses = self.loss(y_hat, heatmaps)
+        total_loss = 0
+        for loss in losses:
+            total_loss += loss.mean(dim=0)
+        self.log("test_loss", total_loss)
+        return total_loss
 
 class HeatmapLoss(nn.Module):
     def __init__(self):
@@ -66,13 +80,14 @@ class HeatmapLoss(nn.Module):
 class MultiHeatMapLoss(nn.Module):
 
     def __init__(self, nb_keypoints, loss_factor=1.0):
+        super().__init__()
         self.nb_keypoints = nb_keypoints
         self.loss_factor = loss_factor
         self.heatmap_losses =\
             nn.ModuleList(
                 [
                     HeatmapLoss()
-                    for _ in self.nb_keypoints
+                    for _ in range(self.nb_keypoints)
                 ]
             )
         
