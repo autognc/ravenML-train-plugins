@@ -1,0 +1,16 @@
+# This sample config contains all fields supported by ravenML core and the keypoints regression plugin.
+# Plugin specific configuration is located in the plugin field.
+
+dataset: tinycygnusdistractors
+overwrite_local: False
+artifact_path: './artifacts'
+ec2_policy: stop
+metadata:
+    created_by: Kevin Black
+    comments: no thanks
+plugin:
+    keypoints: 20
+    batch_size: 5
+   
+    pnp_focal_length: 1422.2222222
+
