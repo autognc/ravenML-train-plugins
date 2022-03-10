@@ -15,6 +15,7 @@ setup(
         "matplotlib",  # ==2.2.2',
         "comet-ml",  # ==3.1.11',
         "moderngl",
+        "albumentations"
     ],
     entry_points="""
         [ravenml.plugins.train]

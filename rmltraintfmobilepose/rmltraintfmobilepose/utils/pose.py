@@ -41,7 +41,6 @@ def solve_pose(
         center *= imdims / extra_crop_params["bbox_size"]
     else:
         center = imdims / 2
-
     cam_matrix = np.array(
         [[focal_length[1], 0, center[1]], [0, focal_length[0], center[0]], [0, 0, 1]],
         dtype=np.float32,

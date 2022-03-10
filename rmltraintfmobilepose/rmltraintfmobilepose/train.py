@@ -5,8 +5,10 @@ from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_bloc
 import os
 from . import utils
 import cv2
-
-
+from albumentations import (
+    Compose, RandomFog, RandomSnow, RandomSunFlare, RandomShadow, RandomRain
+)
+import sys
 class PoseErrorCallback(tf.keras.callbacks.Callback):
     def __init__(
         self,
@@ -32,7 +34,7 @@ class PoseErrorCallback(tf.keras.callbacks.Callback):
         self.real_image_dataset = []
         if real_image_dir:
             self.real_image_dataset = utils.data.dataset_from_directory(
-                real_image_dir, crop_size, len(ref_points), object_name
+                real_image_dir, crop_size, len(ref_points), self.focal_length, object_name
             ).batch(32)
 
     def assign_metric(self, y_true, y_pred):
@@ -175,6 +177,7 @@ class KeypointsModel:
         self.nb_keypoints = hp["keypoints"]
         self.keypoints_3d = keypoints_3d[: self.nb_keypoints]
         self.crop_size = hp["crop_size"]
+        
 
     def _get_dataset(self, split_name, train):
         """
@@ -198,7 +201,28 @@ class KeypointsModel:
             "image/object/pose": tf.io.FixedLenFeature([4], tf.float32),
             "image/imageset": tf.io.FixedLenFeature([], tf.string),
         }
-
+        aux_transforms = []
+        if "random_fog" in self.hp:
+            aux_transforms.append(RandomFog(p=self.hp["random_fog"]))
+        if "random_shadow" in self.hp:
+            aux_transforms.append(RandomShadow(p=self.hp["random_shadow"]))
+        if "random_rain" in self.hp:
+            aux_transforms.append(RandomRain(p=self.hp["random_rain"]))
+        if "random_sun_flare" in self.hp:
+            aux_transforms.append(RandomSunFlare(p=self.hp["random_sun_flare"]))
+        if "random_snow" in self.hp:
+            aux_transforms.append(RandomSnow(p=self.hp["random_snow"]))
+        do_aux_transform = False
+        if len(aux_transforms)>=1:
+            do_aux_transform = True
+            aux_transforms = Compose(aux_transforms)
+        def aug_fn(image, img_size):
+            data = {"image":image}
+            aug_data = aux_transforms(**data)
+            aug_img = aug_data["image"]
+            aug_img = tf.cast(aug_img, tf.float32)
+            aug_img = tf.image.resize(aug_img, size=[img_size, img_size])
+            return aug_img
         def _parse_function(parsed):
             # find an approximate bounding box to crop the image
             height = tf.cast(parsed["image/height"], tf.float32)
@@ -239,7 +263,7 @@ class KeypointsModel:
                 old_dims,
                 self.nb_keypoints,
             )
-
+            
             # other augmentations
             if train:
                 # random multiple of 90 degree rotation
@@ -264,10 +288,12 @@ class KeypointsModel:
                 pose = tf.stack([wn, xn, yn, zn], axis=-1)
                 # adjust image
                 image = tf.image.rot90(image, k)
-
+                
                 # image values into the [0, 1] format
                 image = (image + 1) / 2
-
+                if do_aux_transform:
+                    image = tf.numpy_function(func=aug_fn, inp=[image, self.crop_size], Tout=tf.float32)
+                    image.set_shape([self.crop_size, self.crop_size, 3])
                 if "random_hue" in self.hp:
                     image = tf.image.random_hue(image, self.hp["random_hue"])
                     image = tf.clip_by_value(image, 0, 1)
