@@ -8,6 +8,7 @@ import os
 import glob
 import cv2
 import torchvision.transforms as T
+import albumentations as A
 
 ## TODO: ADD TRANSFORMS, load from directory
 # Transforms: random flip, random crop, random contrast, color, jpeg, gaussian, albumentations augmentations
@@ -55,21 +56,66 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
                 output_size, self.nb_keypoints, self.hp.dataset.sigma
             ) for output_size in self.hp.dataset.output_size
         ]
-        self.transforms = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            T.Resize(self.hp.dataset.input_size)
-        ])
+        self.transforms =[
+            A.ToTensor(),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            A.Resize(self.hp.dataset.input_size, self.hp.dataset.input_size)
+        ]
+        if self.split_name == "train":
+            self.transforms.extend(
+                self._get_train_transforms()
+            )
+        self.transforms = A.Compose(
+            self.transforms,
+            keypoint_params=A.KeypointParams(format='yx')
+        )
     
     def __iter__(self):
         def iterator():
             for feat in self.dataset:
-                keypoints = feat["image/object/keypoints"].reshape(-1, 2)[:self.nb_keypoints]
+                imdims = [feat["image/height"], feat["image/width"]]
+                keypoints = imdims * feat["image/object/keypoints"].reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
                 image = cv2.cvtColor(cv2.imdecode(feat["image/encoded"], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB).astype(np.uint8)
-                heatmaps = [heatmap(keypoints)  for heatmap in self.heatmap_generator]
-                image = self.transforms(image)
+                transformed = self.transforms(image, keypoints) # apply transformations
+                image = transformed["image"] 
+                keypoints = transformed["keypoints"] / self.hp.dataset.input_size # renormalize keypoints
+                heatmaps = [heatmap(keypoints) for heatmap in self.heatmap_generator] # generate groundtruth heatmaps 
                 yield image, heatmaps
         return iterator()
+    
+    def _get_train_transforms(self):
+
+        train_transforms = []
+        train_transforms.append(
+            A.RandomRotate90(p=1.0)
+        )
+        train_transforms.append(
+            A.ColorJitter(
+                brightness=self.hp.get("random_brightness", 0),
+                contrast=self.hp.get("random_contrast", 0),
+                saturation=self.hp.get("random_saturation", 0),
+                hue=self.hp.get("random_hue", 0),
+            )
+        )
+
+        if "random_gaussian" in self.hp:
+            train_transforms.append(A.GaussNoise(self.hp["random_gaussian"]))
+
+        if "random_jpeg" in self.hp:
+            train_transforms.append(A.JpegCompressions(*self.hp["random_jpeg"], always_apply=True))
+        if "random_fog" in self.hp:
+            train_transforms.append(A.RandomFog(p=self.hp["random_fog"]))
+        if "random_shadow" in self.hp:
+            train_transforms.append(A.RandomShadow(p=self.hp["random_shadow"]))
+        if "random_rain" in self.hp:
+            train_transforms.append(A.RandomRain(p=self.hp["random_rain"]))
+        if "random_sun_flare" in self.hp:
+            train_transforms.append(A.RandomSunFlare(p=self.hp["random_sun_flare"]))
+        if "random_snow" in self.hp:
+            train_transforms.append(A.RandomSnow(p=self.hp["random_snow"]))
+    
+        return train_transforms
+
             
 
 
