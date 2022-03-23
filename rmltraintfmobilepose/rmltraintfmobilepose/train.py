@@ -209,7 +209,7 @@ class KeypointsModel:
         if "random_rain" in self.hp:
             aux_transforms.append(RandomRain(p=self.hp["random_rain"]))
         if "random_sun_flare" in self.hp:
-            aux_transforms.append(RandomSunFlare(p=self.hp["random_sun_flare"]))
+            aux_transforms.append(RandomSunFlare(src_radius=50, p=self.hp["random_sun_flare"]))
         if "random_snow" in self.hp:
             aux_transforms.append(RandomSnow(p=self.hp["random_snow"]))
         do_aux_transform = False
