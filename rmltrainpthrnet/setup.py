@@ -17,7 +17,8 @@ setup(
         'tfrecord',
         'pytorch-lightning',
         'torchvision==0.11.3',
-        'attrdict'
+        'attrdict',
+        'albumentations'
     ],
     entry_points="""
         [ravenml.plugins.train]
