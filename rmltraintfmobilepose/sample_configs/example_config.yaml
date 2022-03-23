@@ -16,7 +16,7 @@ plugin:
     crop_size: 224
     shuffle_buffer_size: 1
     model_init_weights: imagenet
-
+    model_architecture: mvbn2
     excluded_imagesets: []
 
     bbox_expand_min: 1.25

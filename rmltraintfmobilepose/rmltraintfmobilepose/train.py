@@ -1,3 +1,4 @@
+from distutils.log import error
 import tensorflow as tf
 import numpy as np
 import traceback
@@ -446,67 +447,54 @@ class KeypointsModel:
 
         return model_path
 
+    
     def _gen_model(self):
-        init_weights = self.hp.get("model_init_weights", "")
-        assert init_weights in ["imagenet", ""]
-        mobilenet = tf.keras.applications.MobileNetV2(
-            include_top=False,
-            weights=init_weights if init_weights != "" else None,
-            input_shape=(self.crop_size, self.crop_size, 3),
-            pooling=None,
-            alpha=1.0,
-        )
-        x = mobilenet.get_layer("block_16_project_BN").output
+        
+        def mbnv2_gen(self):
+            init_weights = self.hp.get("model_init_weights", "")
+            assert init_weights in ["imagenet", ""]
+            mobilenet = tf.keras.applications.MobileNetV2(
+                include_top=False,
+                weights=init_weights if init_weights != "" else None,
+                input_shape=(self.crop_size, self.crop_size, 3),
+                pooling=None,
+                alpha=1.0,
+            )
+            x = mobilenet.get_layer("block_16_project_BN").output
 
-        # 7x7x160 -> 14x14x96
-        x = tf.keras.layers.Conv2DTranspose(
-            filters=96, kernel_size=3, strides=2, padding="same", use_bias=False
-        )(x)
-        x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-        x = tf.keras.layers.ReLU(6.0)(x)
-        x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_12_add").output])
-        x = _inverted_res_block(
-            x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=17
-        )
-        x = _inverted_res_block(
-            x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=18
-        )
+            # 7x7x160 -> 14x14x96
+            x = tf.keras.layers.Conv2DTranspose(
+                filters=96, kernel_size=3, strides=2, padding="same", use_bias=False
+            )(x)
+            x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+            x = tf.keras.layers.ReLU(6.0)(x)
+            x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_12_add").output])
+            x = _inverted_res_block(
+                x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=17
+            )
+            x = _inverted_res_block(
+                x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=18
+            )
 
-        # 14x14x96 -> 28x28x32
-        # x = tf.keras.layers.Conv2DTranspose(
-        #     filters=32, kernel_size=3, strides=2, padding="same", use_bias=False
-        # )(x)
-        # x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-        # x = tf.keras.layers.ReLU(6.0)(x)
-        # x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_5_add").output])
-        # x = _inverted_res_block(
-        #     x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=19
-        # )
-        # x = _inverted_res_block(
-        #     x, filters=32, alpha=1.0, stride=1, expansion=6, block_id=20
-        # )
-        #
-        # # 28x28x32 -> 56x56x24
-        # x = tf.keras.layers.Conv2DTranspose(
-        #     filters=24, kernel_size=3, strides=2, padding="same", use_bias=False
-        # )(x)
-        # x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-        # x = tf.keras.layers.ReLU(6.0)(x)
-        # x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_2_add").output])
-        # x = _inverted_res_block(
-        #     x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=21
-        # )
-        # x = _inverted_res_block(
-        #     x, filters=24, alpha=1.0, stride=1, expansion=6, block_id=22
-        # )
+            x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
 
-        x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
+            # output 1x1 conv
+            x = tf.keras.layers.Conv2D(self.nb_keypoints * 2, kernel_size=1, use_bias=True)(
+                x
+            )
+            return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
 
-        # output 1x1 conv
-        x = tf.keras.layers.Conv2D(self.nb_keypoints * 2, kernel_size=1, use_bias=True)(
-            x
-        )
-        return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
+        def get_model(self, model_arch_name):
+            model_dict = {"mbnv2": mbnv2_gen}
+            fn_gen_name = model_dict(model_arch_name)
+            if fn_gen_name is not None:
+                return model_dict[model_arch_name](self)
+            return error
+
+        return get_model(self.hp("model_architecture"))
+
+    
+
 
     @staticmethod
     def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
