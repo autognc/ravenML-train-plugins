@@ -13,7 +13,7 @@ from albumentations.pytorch import ToTensorV2
 
 ## TODO: ADD TRANSFORMS, load from directory
 # Transforms: random flip, random crop, random contrast, color, jpeg, gaussian, albumentations augmentations
-class HeatMapDataset(torch.utils.data.IterableDataset):
+class HeatMapDataset():
 
     def __init__(self, hp, data_dir, nb_keypoints, split_name):
         self.hp = hp
@@ -44,15 +44,18 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
             "image/encoded": "byte",
             "image/object/pose": "float",
             "image/imageset": "byte",
+            "image/object/translation": "float",
+            "image/filename": "byte"
         }
-        self.dataset = iter(MultiTFRecordDataset(
+        self.dataset = MultiTFRecordDataset(
             record_pattern, 
             index_pattern, 
             splits, 
             features,
-            #shuffle_queue_size=self.hp.get("shuffle_buffer_size", 1000),
-            infinite=False
-        ))
+            shuffle_queue_size=self.hp.get("shuffle_buffer_size", 1000) if self.split_name == "train" else 0,
+            infinite=False,
+            transform=self._tfrecord_transforms
+        )
         self.heatmap_generator = [
             HeatmapGenerator(
                 output_size, self.nb_keypoints, self.hp.dataset.sigma
@@ -67,23 +70,18 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
                 self._get_train_transforms()
             )
         self.transforms = A.Compose(
-            self.transforms,
+            [*self.transforms, ToTensorV2()],
             keypoint_params=A.KeypointParams(format='yx')
         )
-    
-    def __iter__(self):
-        def iterator():
-            for feat in self.dataset:
-                imdims = np.array([feat["image/height"], feat["image/width"]])
-                keypoints = imdims.T * feat["image/object/keypoints"].reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
-                image = cv2.cvtColor(cv2.imdecode(feat["image/encoded"], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB).astype(np.uint8)
-                print(image.shape)
-                transformed = self.transforms(image=image, keypoints=keypoints) # apply transformations
-                image = transformed["image"] 
-                keypoints = np.array(transformed["keypoints"]) / self.hp.dataset.input_size # renormalize keypoints
-                heatmaps = [heatmap(keypoints) for heatmap in self.heatmap_generator] # generate groundtruth heatmaps 
-                yield image, heatmaps
-        return iterator()
+    def _tfrecord_transforms(self, feat):
+        imdims = np.array([feat["image/height"], feat["image/width"]])
+        keypoints = imdims.T * feat["image/object/keypoints"].reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
+        image = cv2.cvtColor(cv2.imdecode(feat["image/encoded"], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB).astype(np.uint8)
+        transformed = self.transforms(image=image, keypoints=keypoints) # apply transformations
+        keypoints = np.array(transformed["keypoints"]) / self.hp.dataset.input_size # renormalize keypoints
+        heatmaps = [heatmap(keypoints) for heatmap in self.heatmap_generator] # generate groundtruth heatmaps 
+        return transformed["image"], heatmaps, imdims, feat["image/object/pose"], feat["image/object/translation"]
+
     
     def _get_train_transforms(self):
 
@@ -118,11 +116,7 @@ class HeatMapDataset(torch.utils.data.IterableDataset):
     
         return train_transforms
 
-            
-
-
-
-
+        
 
 class HeatmapGenerator():
     def __init__(self, output_res, num_joints, sigma=-1):

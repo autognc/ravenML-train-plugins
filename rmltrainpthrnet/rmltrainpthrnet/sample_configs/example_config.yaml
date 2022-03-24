@@ -12,6 +12,6 @@ plugin:
     keypoints: 20
     batch_size: 5
     learning_rate: 0.001
-    shuffle_buffer_size: 0
+    shuffle_buffer_size: 10
     pnp_focal_length: 1422.2222222
 

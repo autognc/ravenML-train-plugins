@@ -9,6 +9,8 @@ import torchvision
 import pytorch_lightning as pl
 from rmltrainpthrnet.model import get_pose_net
 from rmltrainpthrnet.utils.dataset import HeatMapDataset
+from rmltrainpthrnet.utils.heatmaps import keypoints_from_output
+import rmltrainpthrnet.utils.pose as pose_utils
 import torch.nn as nn
 import torch.optim as optim
 ## define trainer here
@@ -23,6 +25,7 @@ class HRNET(pl.LightningModule):
         self.data_dir = data_dir
         self.artifact_dir = artifact_dir
         self.keypoints_3d = keypoints_3d[: self.nb_keypoints]
+        self.focal_length = self.hp["pnp_focal_length"]
         self.model = get_pose_net(self.hp, True)
         self.loss = MultiHeatMapLoss(self.nb_keypoints)
     
@@ -30,13 +33,14 @@ class HRNET(pl.LightningModule):
         return self.model(images)
     
     def train_dataloader(self):
-        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "train")
+        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "train").dataset
         loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=self.hp["batch_size"])
+        #loader = torch.utils.data.DataLoader(ds, batch_size=self.hp["batch_size"])
         return loader
 
-    def test_dataloader(self):
-        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "test")
-        loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=1)
+    def val_dataloader(self):
+        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "test").dataset
+        loader = torch.utils.data.DataLoader(ds, batch_size=1)
         return loader
 
     def configure_optimizers(self):
@@ -45,7 +49,7 @@ class HRNET(pl.LightningModule):
         return [optimizer], [lr_scheduler]
     
     def training_step(self, batch, batch_idx):
-        images, heatmaps = batch
+        images, heatmaps, _,_,_ = batch
         heatmaps = list(map(lambda x: x.cuda(non_blocking=True), heatmaps))
         y_hat = self.model(images)
         losses = self.loss(y_hat, heatmaps)
@@ -55,15 +59,35 @@ class HRNET(pl.LightningModule):
         self.log("train_loss", total_loss)
         return total_loss
     
-    def test_step(self, batch, batch_idx):
-        images, heatmaps = batch
+    def validation_step(self, batch, batch_idx):
+        images, heatmaps, imdims, pose, translation = batch
         heatmaps = list(map(lambda x: x.cuda(non_blocking=True), heatmaps))
-        y_hat = self.model(images)
-        losses = self.loss(y_hat, heatmaps)
+        heatmap_pred = self.model(images)
+        losses = self.loss(heatmap_pred, heatmaps)
         total_loss = 0
         for loss in losses:
             total_loss += loss.mean(dim=0)
-        self.log("test_loss", total_loss)
+        self.log("validation_Loss", total_loss)
+        
+        keypoints_batch = keypoints_from_output(heatmap_pred, self.hp.dataset.input_size, 10).cpu().numpy()
+        keypoints_batch.transpose(0,2,1,3)
+        pose_errs = []
+        trans_errs = []
+        for i, kps in enumerate(keypoints_batch):
+            imdims_single = imdims[i].cpu().numpy()
+            kps = (kps*imdims_single.T)/self.hp.dataset.input_size
+            r_vec, t_vec = pose_utils.solve_pose(
+                    self.keypoints_3d,
+                    kps,
+                    [self.focal_length, self.focal_length],
+                    imdims_single,
+                    ransac=True,
+                    reduce_mean=False,
+            )
+            pose_errs.append(pose_utils.geodesic_error(r_vec, pose[i].cpu().numpy()))
+            trans_errs.append(pose_utils.position_error(t_vec, translation[i].cpu().numpy())[1])
+        self.log("validation_pose_err", np.degrees(np.mean(pose_errs)), prog_bar=True)
+        self.log("validation_translation_err", np.mean(trans_errs), prog_bar=True)    
         return total_loss
 
 class HeatmapLoss(nn.Module):
