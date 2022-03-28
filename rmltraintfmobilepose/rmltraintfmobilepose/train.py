@@ -450,6 +450,33 @@ class KeypointsModel:
     
     def _gen_model(self):
         
+        #training model for pose regression
+        def poseRegression_gen(self):
+            mobilenet = tf.keras.applications.MobileNetV2(
+            include_top=False,
+            pooling='avg',
+            weights='imagenet',
+            input_shape=(self.hp['crop_size'], self.hp['crop_size'], 3)
+        )
+
+            feature_map = mobilenet.output
+            regression_head_layers = [tf.keras.layers.Flatten()]
+            for layer_size in self.hp['regression_head']:
+                regression_head_layers += [
+                    tf.keras.layers.Dense(layer_size, use_bias=True),
+                    tf.keras.layers.BatchNormalization(),
+                    tf.keras.layers.ReLU(),
+                    tf.keras.layers.Dropout(self.hp['dropout'])
+                ]
+            regression_head_layers += [
+                tf.keras.layers.Dense(4),
+                tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))
+            ]
+            regression_head = tf.keras.Sequential(regression_head_layers, name='regression_head')
+            regression_output = regression_head(feature_map)
+            return tf.keras.Model(inputs=[mobilenet.input], outputs=[regression_output])
+        
+        #training function for mobilenetv2 architectures
         def mbnv2_gen(self):
             init_weights = self.hp.get("model_init_weights", "")
             assert init_weights in ["imagenet", ""]
@@ -484,14 +511,20 @@ class KeypointsModel:
             )
             return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
 
-        def get_model(self, model_arch_name):
-            model_dict = {"mbnv2": mbnv2_gen}
-            fn_gen_name = model_dict(model_arch_name)
+        #return a appropriate training function given 'model_architecture' (in config file)
+        def get_model(model_arch_name):
+            #expand upon MODEL_ARCHITECTURES as more model architectures are added. 
+            MODEL_ARCHITECTURES = {
+                                    "mbnv2": mbnv2_gen,
+                                    "preg" : poseRegression_gen
+                                    }
+            
+            fn_gen_name = MODEL_ARCHITECTURES[model_arch_name]
             if fn_gen_name is not None:
-                return model_dict[fn_gen_name](self)
+                return fn_gen_name
             return error
 
-        return get_model(self.hp("model_architecture"))
+        return get_model(self.hp["model_architecture"])(self)
 
     
 
