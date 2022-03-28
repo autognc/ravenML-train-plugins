@@ -2,11 +2,9 @@ from distutils.log import error
 import tensorflow as tf
 import numpy as np
 import traceback
-from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
 import os
 from . import utils
 import cv2
-
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
     def __init__(
@@ -450,34 +448,45 @@ class KeypointsModel:
     
     def _gen_model(self):
         
-        #training model for pose regression
-        def poseRegression_gen(self):
-            mobilenet = tf.keras.applications.MobileNetV2(
-            include_top=False,
-            pooling='avg',
-            weights='imagenet',
-            input_shape=(self.hp['crop_size'], self.hp['crop_size'], 3)
-        )
+        #training model for mobilenetv3 architectures
+        def mbnv3_gen(self):
+            from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
+            init_weights = self.hp.get("model_init_weights", "")
+            assert init_weights in ["imagenet", ""]
+            mobilenet = tf.keras.applications.MobileNetV3Large(
+                include_top=False,
+                weights=init_weights,
+                input_shape=(self.crop_size, self.crop_size, 3),
+                pooling=None,
+            )
+            x = mobilenet.get_layer("expanded_conv_14/Add").output
 
-            feature_map = mobilenet.output
-            regression_head_layers = [tf.keras.layers.Flatten()]
-            for layer_size in self.hp['regression_head']:
-                regression_head_layers += [
-                    tf.keras.layers.Dense(layer_size, use_bias=True),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.ReLU(),
-                    tf.keras.layers.Dropout(self.hp['dropout'])
-                ]
-            regression_head_layers += [
-                tf.keras.layers.Dense(4),
-                tf.keras.layers.Lambda(lambda x: tf.math.l2_normalize(x, axis=-1))
-            ]
-            regression_head = tf.keras.Sequential(regression_head_layers, name='regression_head')
-            regression_output = regression_head(feature_map)
-            return tf.keras.Model(inputs=[mobilenet.input], outputs=[regression_output])
+            # 7x7x160 -> 14x14x112
+            x = tf.keras.layers.Conv2DTranspose(
+                filters=112, kernel_size=3, strides=2, padding="same", use_bias=False
+            )(x)
+            x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
+            x = tf.keras.layers.ReLU(6.0)(x)
+            x = tf.keras.layers.concatenate([x, mobilenet.get_layer("expanded_conv_11/Add").output])
+            
+            x = _inverted_res_block(
+                x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=17
+            )
+            x = _inverted_res_block(
+                x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=18
+            )
+
+            x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
+
+            # output 1x1 conv
+            x = tf.keras.layers.Conv2D(self.nb_keypoints * 2, kernel_size=1, use_bias=True)(
+                x
+            )
+            return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
         
-        #training function for mobilenetv2 architectures
+        #training model for mobilenetv2 architectures
         def mbnv2_gen(self):
+            from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
             init_weights = self.hp.get("model_init_weights", "")
             assert init_weights in ["imagenet", ""]
             mobilenet = tf.keras.applications.MobileNetV2(
@@ -513,10 +522,9 @@ class KeypointsModel:
 
         #return a appropriate training function given 'model_architecture' (in config file)
         def get_model(model_arch_name):
-            #expand upon MODEL_ARCHITECTURES as more model architectures are added. 
             MODEL_ARCHITECTURES = {
                                     "mbnv2": mbnv2_gen,
-                                    "preg" : poseRegression_gen
+                                    "mbnv3": mbnv3_gen
                                     }
             
             fn_gen_name = MODEL_ARCHITECTURES[model_arch_name]
