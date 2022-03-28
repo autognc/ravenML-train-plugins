@@ -1,22 +1,22 @@
 # This sample config contains all fields supported by ravenML core and the keypoints regression plugin.
 # Plugin specific configuration is located in the plugin field.
 
-dataset: cygnus_10k_keypoints_pose
+dataset: tinycygnusdistractors
 overwrite_local: False
 artifact_path: './artifacts'
 ec2_policy: stop
 metadata:
-    created_by: Kevin Black
+    created_by: Shahmir Masood
     comments: no thanks
 plugin:
     keypoints: 20
     batch_size: 5
-    cache_train_data: False
+    cache_train_data: True
     prefetch_num_batches: 10
     crop_size: 224
-    shuffle_buffer_size: 1
+    shuffle_buffer_size: 200
     model_init_weights: imagenet
-    model_architecture: mvbn2
+    model_architecture: mbnv2
     excluded_imagesets: []
 
     bbox_expand_min: 1.25
@@ -27,7 +27,7 @@ plugin:
     random_contrast: [ 0.8, 1.2 ]
     # random_gaussian: 0.05
     random_jpeg: [ 75, 100 ]
-    real_image_dir: '/home/ubuntu/cygnus-real-filtered'
+    #real_image_dir: '/home/ubuntu/cygnus-real-filtered'
     phases:
         - optimizer: Adam
           optimizer_args: {}

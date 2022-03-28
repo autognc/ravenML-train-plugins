@@ -488,7 +488,7 @@ class KeypointsModel:
             model_dict = {"mbnv2": mbnv2_gen}
             fn_gen_name = model_dict(model_arch_name)
             if fn_gen_name is not None:
-                return model_dict[model_arch_name](self)
+                return model_dict[fn_gen_name](self)
             return error
 
         return get_model(self.hp("model_architecture"))
