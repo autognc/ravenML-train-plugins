@@ -5,6 +5,9 @@ import traceback
 import os
 from . import utils
 import cv2
+from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
+from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
+
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
     def __init__(
@@ -450,7 +453,6 @@ class KeypointsModel:
         
         #training model for mobilenetv3 architectures
         def mbnv3_gen(self):
-            from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
             init_weights = self.hp.get("model_init_weights", "")
             assert init_weights in ["imagenet", ""]
             mobilenet = tf.keras.applications.MobileNetV3Large(
@@ -486,7 +488,6 @@ class KeypointsModel:
         
         #training model for mobilenetv2 architectures
         def mbnv2_gen(self):
-            from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
             init_weights = self.hp.get("model_init_weights", "")
             assert init_weights in ["imagenet", ""]
             mobilenet = tf.keras.applications.MobileNetV2(
