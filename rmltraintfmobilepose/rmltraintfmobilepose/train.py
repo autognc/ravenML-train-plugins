@@ -3,11 +3,11 @@ import tensorflow as tf
 import numpy as np
 import traceback
 import os
-from . import utils
+from rmltraintfmobilepose import utils
+from rmltraintfmobilepose.utils.model_creation import create_model_from_config
 import cv2
-from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
 from tensorflow.python.keras.applications.mobilenet_v2 import _inverted_res_block
-
+#from tensorflow.python.keras.applications.mobilenet_v3 import _inverted_res_block, hard_swish
 
 class PoseErrorCallback(tf.keras.callbacks.Callback):
     def __init__(
@@ -448,95 +448,9 @@ class KeypointsModel:
 
         return model_path
 
-    
     def _gen_model(self):
-        
-        #training model for mobilenetv3 architectures
-        def mbnv3_gen(self):
-            init_weights = self.hp.get("model_init_weights", "")
-            assert init_weights in ["imagenet", ""]
-            mobilenet = tf.keras.applications.MobileNetV3Large(
-                include_top=False,
-                weights=init_weights,
-                input_shape=(self.crop_size, self.crop_size, 3),
-                pooling=None,
-            )
-            x = mobilenet.get_layer("expanded_conv_14/Add").output
-
-            # 7x7x160 -> 14x14x112
-            x = tf.keras.layers.Conv2DTranspose(
-                filters=112, kernel_size=3, strides=2, padding="same", use_bias=False
-            )(x)
-            x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-            x = tf.keras.layers.ReLU(6.0)(x)
-            x = tf.keras.layers.concatenate([x, mobilenet.get_layer("expanded_conv_11/Add").output])
-            
-            x = _inverted_res_block(
-                x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=17
-            )
-            x = _inverted_res_block(
-                x, filters=112, kernel_size=3, stride=1, expansion=6, activation=hard_swish, se_ratio=0.25, block_id=18
-            )
-
-            x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
-
-            # output 1x1 conv
-            x = tf.keras.layers.Conv2D(self.nb_keypoints * 2, kernel_size=1, use_bias=True)(
-                x
-            )
-            return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
-        
-        #training model for mobilenetv2 architectures
-        def mbnv2_gen(self):
-            init_weights = self.hp.get("model_init_weights", "")
-            assert init_weights in ["imagenet", ""]
-            mobilenet = tf.keras.applications.MobileNetV2(
-                include_top=False,
-                weights=init_weights if init_weights != "" else None,
-                input_shape=(self.crop_size, self.crop_size, 3),
-                pooling=None,
-                alpha=1.0,
-            )
-            x = mobilenet.get_layer("block_16_project_BN").output
-
-            # 7x7x160 -> 14x14x96
-            x = tf.keras.layers.Conv2DTranspose(
-                filters=96, kernel_size=3, strides=2, padding="same", use_bias=False
-            )(x)
-            x = tf.keras.layers.BatchNormalization(epsilon=1e-3, momentum=0.999)(x)
-            x = tf.keras.layers.ReLU(6.0)(x)
-            x = tf.keras.layers.concatenate([x, mobilenet.get_layer("block_12_add").output])
-            x = _inverted_res_block(
-                x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=17
-            )
-            x = _inverted_res_block(
-                x, filters=96, alpha=1.0, stride=1, expansion=6, block_id=18
-            )
-
-            x = tf.keras.layers.SpatialDropout2D(self.hp["dropout"])(x)
-
-            # output 1x1 conv
-            x = tf.keras.layers.Conv2D(self.nb_keypoints * 2, kernel_size=1, use_bias=True)(
-                x
-            )
-            return tf.keras.models.Model(mobilenet.input, x, name="mobilepose")
-
-        #return a appropriate training function given 'model_architecture' (in config file)
-        def get_model(model_arch_name):
-            MODEL_ARCHITECTURES = {
-                                    "mbnv2": mbnv2_gen,
-                                    "mbnv3": mbnv3_gen
-                                    }
-            
-            fn_gen_name = MODEL_ARCHITECTURES[model_arch_name]
-            if fn_gen_name is not None:
-                return fn_gen_name
-            return error
-
-        return get_model(self.hp["model_architecture"])(self)
-
-    
-
+        #from utils/model_creation.py
+        return create_model_from_config(self.hp)
 
     @staticmethod
     def encode_label(*, keypoints, pose, height, width, bbox_size, centroid):
