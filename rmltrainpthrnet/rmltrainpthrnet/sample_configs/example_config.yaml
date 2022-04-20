@@ -1,7 +1,7 @@
 # This sample config contains all fields supported by ravenML core and the keypoints regression plugin.
 # Plugin specific configuration is located in the plugin field.
 
-dataset: tinycygnusdistractors
+dataset: tinycygnusdistractors_pt
 overwrite_local: False
 artifact_path: './artifacts'
 ec2_policy: stop

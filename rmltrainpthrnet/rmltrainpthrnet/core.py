@@ -50,7 +50,10 @@ def train(ctx, train: TrainInput, comet):
     artifact_dir = train.artifact_path
 
     # set dataset directory
-    data_dir = train.dataset.path / "splits" / "complete" / "train"
+    if os.path.exists(train.dataset.path / "splits"):
+        print("Dataset is in TFRecord format, but PyTorch format is required. Use the convert-dataset command to switch.")
+        return
+    data_dir = train.dataset.path 
     keypoints_path = train.dataset.path / "keypoints.npy"
 
     hyperparameters = train.plugin_config

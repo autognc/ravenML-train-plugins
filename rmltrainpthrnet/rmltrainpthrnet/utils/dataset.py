@@ -10,10 +10,111 @@ import cv2
 import torchvision.transforms as T
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from torch.utils.data import Dataset
+import json
+import pickle
 
 ## TODO: ADD TRANSFORMS, load from directory
 # Transforms: random flip, random crop, random contrast, color, jpeg, gaussian, albumentations augmentations
-class HeatMapDataset():
+
+# class TFDataset(Dataset):
+
+
+
+class HeatMapDataset(Dataset):
+
+    def __len__(self):
+        return len(self.image_filenames)
+
+    def __getitem__(self, idx):
+        image_filename = self.image_filenames[idx]
+        meta_filename = self.meta_filenames[idx]
+        with open(meta_filename, 'r') as f:
+            metadata = json.load(f)
+        # image, heatmaps, imdims, pose, translation 
+        return self.get_transforms(metadata, image_filename)
+        
+
+    def get_transforms(self, feat, image_filename):
+        # denormalize keypoint values
+        imdims = np.array([feat["image/height"], feat["image/width"]])
+        keypoints = imdims.T * np.array(feat["image/object/keypoints"]).reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
+        image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB).astype(np.uint8)
+        transformed = self.transforms(image=image, keypoints=keypoints) # apply transformations
+        keypoints = np.array(transformed["keypoints"]) / self.hp.dataset.input_size # renormalize keypoints
+        heatmaps = [heatmap(keypoints) for heatmap in self.heatmap_generator] # generate groundtruth heatmaps 
+        return transformed["image"], heatmaps, imdims, np.array(feat["image/object/pose"]), np.array(feat["image/object/translation"])
+
+    
+    def _get_train_transforms(self):
+
+        train_transforms = []
+        train_transforms.append(
+            A.RandomRotate90(p=1.0)
+        )
+        train_transforms.append(
+            A.ColorJitter(
+                brightness=self.hp.get("random_brightness", 0),
+                contrast=self.hp.get("random_contrast", 0),
+                saturation=self.hp.get("random_saturation", 0),
+                hue=self.hp.get("random_hue", 0),
+            )
+        )
+
+        if "random_gaussian" in self.hp:
+            train_transforms.append(A.GaussNoise(self.hp["random_gaussian"]))
+
+        if "random_jpeg" in self.hp:
+            train_transforms.append(A.ImageCompression(*self.hp["random_jpeg"], always_apply=True))
+        if "random_fog" in self.hp:
+            train_transforms.append(A.RandomFog(p=self.hp["random_fog"]))
+        if "random_shadow" in self.hp:
+            train_transforms.append(A.RandomShadow(p=self.hp["random_shadow"]))
+        if "random_rain" in self.hp:
+            train_transforms.append(A.RandomRain(p=self.hp["random_rain"]))
+        if "random_sun_flare" in self.hp:
+            train_transforms.append(A.RandomSunFlare(src_radius=200,p=self.hp["random_sun_flare"]))
+        if "random_snow" in self.hp:
+            train_transforms.append(A.RandomSnow(p=self.hp["random_snow"]))
+    
+        return train_transforms
+
+    def __init__(self, hp, data_dir, nb_keypoints, split_name):
+        # with open('hp', 'wb') as f:
+        #     pickle.dump(hp, f)
+        # input()
+        self.hp = hp
+        self.data_dir = data_dir
+        self.nb_keypoints = nb_keypoints
+        self.split_name = split_name
+        split_prefix = f"{split_name}/"
+        self.image_filenames = sorted(glob.glob(
+            os.path.join(self.data_dir, split_prefix, "image_*")
+        ))
+        self.meta_filenames = sorted(glob.glob(
+            os.path.join(self.data_dir, split_prefix, "meta_*")
+        ))
+        self.heatmap_generator = [
+            HeatmapGenerator(
+                output_size, self.nb_keypoints, self.hp.dataset.sigma
+            ) for output_size in self.hp.dataset.output_size
+        ]
+        self.transforms =[     
+            # these values come from the imagenet dataset
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), 
+            A.Resize(self.hp.dataset.input_size, self.hp.dataset.input_size),
+        ]
+        if self.split_name == "train":
+            self.transforms.extend(
+                self._get_train_transforms()
+            )
+        self.transforms = A.Compose(
+            [*self.transforms, ToTensorV2()],
+            keypoint_params=A.KeypointParams(format='yx')
+        )
+
+
+class HeatMapDataset2():
 
     def __init__(self, hp, data_dir, nb_keypoints, split_name):
         self.hp = hp
@@ -73,6 +174,7 @@ class HeatMapDataset():
             [*self.transforms, ToTensorV2()],
             keypoint_params=A.KeypointParams(format='yx')
         )
+        
     def _tfrecord_transforms(self, feat):
         imdims = np.array([feat["image/height"], feat["image/width"]])
         keypoints = imdims.T * feat["image/object/keypoints"].reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
