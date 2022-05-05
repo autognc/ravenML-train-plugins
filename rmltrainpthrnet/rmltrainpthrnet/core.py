@@ -23,6 +23,8 @@ import importlib
 import yaml
 from attrdict import AttrDict
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import CometLogger
+
 
 @click.group(help="Pytorch Keypoints Regression.")
 def pt_hrnet():
@@ -69,27 +71,35 @@ def train(ctx, train: TrainInput, comet):
     train.plugin_metadata["architecture"] = "keypoints_regression"
     train.plugin_metadata["config"] = hyperparameters
 
-    experiment = None
-    if comet:
-        experiment = Experiment(
-            workspace="seeker-rd", project_name="keypoints-pose-regression"
-        )
-        experiment.set_name(comet)
-        experiment.log_parameters(hyperparameters)
-        experiment.set_os_packages()
-        experiment.set_pip_packages()
+    # experiment = None
+    # if comet:
+    #     experiment = Experiment(
+    #         workspace="seeker-rd", project_name="keypoints-pose-regression"
+    #     )
+    #     experiment.set_name(comet)
+    #     experiment.log_parameters(hyperparameters)
+    #     experiment.set_os_packages()
+    #     experiment.set_pip_packages()
 
     # run training
     print("Beginning training. Hyperparameters:")
     print(json.dumps(hyperparameters, indent=2))
     model = HRNET(hyperparameters, data_dir, artifact_dir, keypoints_3d)
-    trainer = pl.Trainer(gpus=1)
-    with ExitStack() as stack:
-        if experiment:
-            stack.enter_context(experiment.train())
-        model_path = trainer.fit(model)
-    if experiment:
-        experiment.end()
+    comet_logger = None
+    if comet:
+        comet_logger = CometLogger(
+            workspace="seeker-rd",
+            project_name="keypoints-pose-regression",
+            experiment_name=comet
+        )
+
+    trainer = pl.Trainer(gpus=1, max_epochs=3, log_every_n_steps=1, logger=comet_logger)
+    # with ExitStack() as stack:
+    #     if experiment:
+    #         stack.enter_context(experiment.train())
+    model_path = trainer.fit(model)
+    # if experiment:
+    #     experiment.end()
 
     # get Tensorboard files
     # FIXME: The directory structure is very important for interpreting the Tensorboard logs

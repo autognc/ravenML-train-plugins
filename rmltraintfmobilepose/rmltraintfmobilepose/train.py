@@ -428,6 +428,9 @@ class KeypointsModel:
                 metrics=[pose_error_callback.assign_metric],
             )
             try:
+                print('lr_schedule', phase["lr_schedule"])
+                print('-1', phase["lr_schedule"][-1])
+                input()
                 model.fit(
                     train_dataset,
                     epochs=phase["lr_schedule"][-1]["epoch"],

@@ -13,12 +13,13 @@ from rmltrainpthrnet.utils.heatmaps import keypoints_from_output
 import rmltrainpthrnet.utils.pose as pose_utils
 import torch.nn as nn
 import torch.optim as optim
+import math
 ## define trainer here
 
 ## TODO: optimizer options, model options, validation from directory, val step pose error, comet logging
 class HRNET(pl.LightningModule):
 
-    def __init__(self, hp, data_dir, artifact_dir, keypoints_3d):
+    def __init__(self, hp, data_dir, artifact_dir, keypoints_3d, experiment=None):
         super().__init__()
         self.hp = hp
         self.nb_keypoints = hp["keypoints"]
@@ -28,24 +29,28 @@ class HRNET(pl.LightningModule):
         self.focal_length = self.hp["pnp_focal_length"]
         self.model = get_pose_net(self.hp, True)
         self.loss = MultiHeatMapLoss(self.nb_keypoints)
+        self.experiment = experiment
     
     def forward(self, images):  
         return self.model(images)
     
     def train_dataloader(self):
-        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "train").dataset
+        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "train")
+        print('LEN TRAINSET', len(ds))
         loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=self.hp["batch_size"])
         #loader = torch.utils.data.DataLoader(ds, batch_size=self.hp["batch_size"])
         return loader
 
     def val_dataloader(self):
-        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "test").dataset
-        loader = torch.utils.data.DataLoader(ds, batch_size=1)
+        ds = HeatMapDataset(self.hp, self.data_dir, self.nb_keypoints, "test")
+        print('LEN VALSET', len(ds))
+        loader = torch.utils.data.DataLoader(ds, num_workers=self.hp.dataset.num_workers, batch_size=1)
         return loader
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hp["learning_rate"]) ##TODO: more optimizer options
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1) ##TODO: better LR schedule
+        lr_scheduler = torch.optim.lr_scheduler.ChainedScheduler([torch.optim.lr_scheduler.ExponentialLR(optimizer, block["exp"], last_epoch=block["epoch"]) for block in self.hp["lr_schedule"]])
+        # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1) ##TODO: better LR schedule
         return [optimizer], [lr_scheduler]
     
     def training_step(self, batch, batch_idx):
