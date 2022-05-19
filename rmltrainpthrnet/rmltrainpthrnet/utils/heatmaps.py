@@ -20,7 +20,6 @@ def aggregate_heatmaps(hms, size):
     return hms
 
 def keypoints_from_heatmaps(hms, k=10):
-    
     h = hms.size(2)
     w = hms.size(3)
     hms = hms.view(*hms.shape[:2], -1)

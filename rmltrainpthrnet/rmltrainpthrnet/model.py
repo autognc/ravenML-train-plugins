@@ -519,6 +519,7 @@ class PoseHigherResolutionNet(nn.Module):
 
     def init_weights(self, pretrained='', verbose=True):
         logger.info('=> init weights from normal distribution')
+        print('=> init weights from normal distribution')
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.normal_(m.weight, std=0.001)
@@ -557,6 +558,7 @@ class PoseHigherResolutionNet(nn.Module):
                             )
                         need_init_state_dict[name] = m
             self.load_state_dict(need_init_state_dict, strict=False)
+            print('=> loading pretrained model {}'.format(pretrained))
 
 
 def get_pose_net(cfg, is_train, **kwargs):

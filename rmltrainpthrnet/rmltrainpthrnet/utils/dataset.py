@@ -39,6 +39,8 @@ class HeatMapDataset(Dataset):
         # denormalize keypoint values
         imdims = np.array([feat["image/height"], feat["image/width"]])
         keypoints = imdims.T * np.array(feat["image/object/keypoints"]).reshape(-1, 2)[:self.nb_keypoints] ## convert keypoints to pixel space
+        keypoints[:,0] = np.clip(keypoints[:,0], 0, imdims[0]-0.01)
+        keypoints[:,1] = np.clip(keypoints[:,1], 0, imdims[1]-0.01)
         image = cv2.cvtColor(cv2.imread(image_filename), cv2.COLOR_BGR2RGB).astype(np.uint8)
         transformed = self.transforms(image=image, keypoints=keypoints) # apply transformations
         keypoints = np.array(transformed["keypoints"]) / self.hp.dataset.input_size # renormalize keypoints
@@ -89,11 +91,11 @@ class HeatMapDataset(Dataset):
         self.split_name = split_name
         split_prefix = f"{split_name}/"
         self.image_filenames = sorted(glob.glob(
-            os.path.join(self.data_dir, split_prefix, "image_*")
-        ))
+            os.path.join(self.data_dir, split_prefix, "img*jpg")
+        ))[:1000]
         self.meta_filenames = sorted(glob.glob(
-            os.path.join(self.data_dir, split_prefix, "meta_*")
-        ))
+            os.path.join(self.data_dir, split_prefix, "img*.json")
+        ))[:1000]
         self.heatmap_generator = [
             HeatmapGenerator(
                 output_size, self.nb_keypoints, self.hp.dataset.sigma
@@ -253,4 +255,4 @@ class HeatmapGenerator():
             aa, bb = max(0, ul[1]), min(br[1], self.output_res)
             hms[idx, aa:bb, cc:dd] = np.maximum(
                 hms[idx, aa:bb, cc:dd], self.g[a:b, c:d])
-        return hms
+        return hms + np.random.normal(loc=0, scale=0.01, size=hms.shape)

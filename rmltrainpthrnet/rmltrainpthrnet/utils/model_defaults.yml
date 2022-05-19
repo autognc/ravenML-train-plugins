@@ -54,13 +54,13 @@ MODEL:
       - True
   INIT_WEIGHTS: True
   NAME: pose_higher_hrnet
-  NUM_JOINTS: 20
-  PRETRAINED: 'models/pytorch/imagenet/hrnet_w32-36af842e.pth'
+  NUM_JOINTS: 11
+  PRETRAINED: 'hrnet_w32-36af842e.pth'
   TAG_PER_JOINT: False
 dataset:
   sigma: 2
   input_size: 512
   output_size: [128, 256]
   scale_type: 'short'
-  num_joints: 20
+  num_joints: 11
   num_workers: 8

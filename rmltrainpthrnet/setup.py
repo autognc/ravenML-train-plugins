@@ -9,14 +9,14 @@ setup(
     packages=find_packages(),
     install_requires=[
         "numpy",  # ==1.18.4',
-        "torch==1.10.2",
+        "torch>=1.10.2",
         "opencv-python",  # ==4.2.0.34',
         "tqdm",  # ==4.36.1',
         "matplotlib",  # ==2.2.2',
         "comet-ml",  # ==3.1.11',
         'tfrecord',
         'pytorch-lightning',
-        'torchvision==0.11.3',
+        'torchvision>=0.11.3',
         'attrdict',
         'albumentations'
     ],

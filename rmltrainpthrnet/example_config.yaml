@@ -1,0 +1,31 @@
+# This sample config contains all fields supported by ravenML core and the keypoints regression plugin.
+# Plugin specific configuration is located in the plugin field.
+
+dataset: speedplus_11kp_20k_pt
+overwrite_local: False
+artifact_path: './artifacts'
+ec2_policy: stop
+metadata:
+    created_by: Kevin Black
+    comments: no thanks
+plugin:
+    keypoints: 11
+    batch_size: 20
+    learning_rate: 0.001
+    shuffle_buffer_size: 10
+    pnp_focal_length: 2988.58
+    # phases:
+    #     - optimizer: Adam
+    #       optimizer_args: {}
+    #       start_layer: input_1
+    lr_schedule:
+      - exp: 0
+        lr: 0.001
+        epoch: 75
+      - exp: 0
+        lr: 0.0001
+        epoch: 150
+      - exp: 0.05
+        lr: 0.0001
+        epoch: 225  # this is the total # of epochs
+

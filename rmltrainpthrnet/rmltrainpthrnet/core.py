@@ -93,7 +93,7 @@ def train(ctx, train: TrainInput, comet):
             experiment_name=comet
         )
 
-    trainer = pl.Trainer(gpus=1, max_epochs=3, log_every_n_steps=1, logger=comet_logger)
+    trainer = pl.Trainer(gpus=1, max_epochs=hyperparameters["lr_schedule"][-1]["epoch"], log_every_n_steps=1, logger=comet_logger)
     # with ExitStack() as stack:
     #     if experiment:
     #         stack.enter_context(experiment.train())
@@ -236,7 +236,7 @@ def convert_dataset(ctx, train: TrainInput, comet):
 
         for record in dataset:
             save_record(record)
-
+    ###TODO: Change this to just S3 Sync
     for split_name in ['train', 'test']:
         convert_split(split_name)
         shutil.make_archive(converted_dataset_path / split_name, 'zip', converted_dataset_path / split_name)
