@@ -6,7 +6,7 @@ setup(
     description='Tensorflow direct pose regression plugin for ravenml',
     packages=find_packages(),
     install_requires=[
-        'numpy==1.16.4',
+        'numpy==1.22.0',
         'pillow==6.0.0',
         'matplotlib==3.1.0',
         'tqdm==4.32.2',
