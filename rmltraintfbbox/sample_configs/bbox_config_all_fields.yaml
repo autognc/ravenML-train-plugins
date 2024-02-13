@@ -1,7 +1,7 @@
 # This sample config contains all fields supported by ravenML core and the bbox plugin.
 # Plugin specific configuration is located in the plugin field.
 
-dataset: click_test
+dataset: bbox_test_dataset
 overwrite_local: True
 artifact_path: '~/Desktop/test'
 # options are:
@@ -18,6 +18,8 @@ plugin:
     comet: false
     model: ssd_mobilenet_v2_coco
     optimizer: RMSProp
+    log_train_every: 100
+    log_eval_every: 14000
     # NOTE: if use_default_config is true, hyperparameters are IGNORED
     use_default_config: true
     hyperparameters:
