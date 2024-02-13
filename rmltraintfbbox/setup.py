@@ -37,18 +37,18 @@ setup(
     description='Tensorflow Bounding Box training plugin for ravenml',
     packages=find_packages(),
     install_requires=[
-        'numpy==1.16.4',
+        'numpy',
         'object-detection @ https://github.com/autognc/object-detection/tarball/object-detection-v2#egg=object-detection-v2',
         #'slim @ https://github.com/autognc/object-detection/tarball/slim-v2#slim-v2',
-        'matplotlib==3.1.1',
+        'matplotlib',
         'contextlib2==0.5.5',
-        'pillow==6.1.0',
+        'pillow',
         'comet-ml==2.0.13',
-        'opencv-python==4.1.2.30',
+        'opencv-python',
         'six==1.13.0',
         'scipy==1.4.1',
         'halo==0.0.29',
-        'urllib3==1.24.3',
+        'urllib3',
         'tensorflow==2.3.0'
     ],
     entry_points=f'''
