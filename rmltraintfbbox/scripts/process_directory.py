@@ -5,6 +5,7 @@ import os
 import cv2
 import time
 from PIL import Image
+sys.path.append(sys.path[0] + '/..')
 import rmltraintfbbox.validation.utils as utils
 from rmltraintfbbox.validation.stats import BoundingBoxEvaluator
 import object_detection.utils.visualization_utils as visualization
