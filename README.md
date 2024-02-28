@@ -5,6 +5,19 @@ Note that these plugins assume that all ravenML dependencies are present in your
 virtual environment or on your system. They do not install any dependencies that
 ravenML also depends on.
 
+## Setup
+To install and run a plugin, move into it's directory and run the following commands.
+
+1. Activate ravenml: 
+```bash
+conda activate ravenml
+```
+
+2. Install the necessary dependencies:
+```bash
+pip install -e .
+```
+
 ## Structure
 All plugins are independent and separate Python packages with the following structure:
 ```
