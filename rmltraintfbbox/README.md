@@ -37,7 +37,12 @@ ravenml train -c <path to config yml file> tf-bbox train
 
 1. Create a conversion environment:
 ```bash
-conda create --name myenv python=3.10.0 tensorflow tf2onnx
+conda create --name tf-convert python=3.10.0 tensorflow tf2onnx
+```
+
+2. Activate the environment:
+```bash
+conda activate tf-convert
 ```
 
 3. Move into folder with the saved model:
